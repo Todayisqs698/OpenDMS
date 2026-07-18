@@ -1,0 +1,52 @@
+{
+    "pages": [
+        {
+            "path": "pages/dashboard/dashboard",
+            "style": {
+                "navigationBarTitleText": "EdgeGuard",
+                "navigationStyle": "custom"
+            }
+        },
+        {
+            "path": "pages/settings/settings",
+            "style": {
+                "navigationBarTitleText": "设置"
+            }
+        },
+        {
+            "path": "pages/logs/logs",
+            "style": {
+                "navigationBarTitleText": "驾驶日志"
+            }
+        }
+    ],
+    "globalStyle": {
+        "navigationBarTextStyle": "white",
+        "navigationBarTitleText": "EdgeGuard",
+        "navigationBarBackgroundColor": "#1a1a2e",
+        "backgroundColor": "#0f0f1e",
+        "app-plus": {
+            "background": "#0f0f1e"
+        }
+    },
+    "tabBar": {
+        "color": "#666666",
+        "selectedColor": "#4FC3F7",
+        "backgroundColor": "#1a1a2e",
+        "borderStyle": "black",
+        "list": [
+            {
+                "pagePath": "pages/dashboard/dashboard",
+                "text": "驾驶"
+            },
+            {
+                "pagePath": "pages/logs/logs",
+                "text": "日志"
+            },
+            {
+                "pagePath": "pages/settings/settings",
+                "text": "设置"
+            }
+        ]
+    }
+}

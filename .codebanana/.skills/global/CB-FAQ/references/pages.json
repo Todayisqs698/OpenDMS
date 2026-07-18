@@ -1,0 +1,162 @@
+[
+  {
+    "id": "changelog",
+    "title": "Changelog",
+    "path": "changelog/changelog.mdx",
+    "url": "/changelog/changelog",
+    "keywords": ["changelog", "updates", "new features", "bug fixes", "release", "new", "latest", "更新", "新功能", "更新日志", "版本"],
+    "aliases": ["最近更新", "有什么新功能", "最新版本", "release notes", "最新改动", "what's new", "what is new", "latest update"]
+  },
+  {
+    "id": "first-app",
+    "title": "Build Your First App",
+    "path": "quickstarts/firstapp.mdx",
+    "url": "/quickstarts/firstapp",
+    "keywords": ["first app", "create project", "build app", "new project", "get started", "quickstart", "新建项目", "创建项目", "第一个应用"],
+    "aliases": ["怎么开始", "如何创建第一个项目", "入门", "how to start", "getting started"]
+  },
+  {
+    "id": "templates",
+    "title": "Start with Templates",
+    "path": "quickstarts/templates.mdx",
+    "url": "/quickstarts/templates",
+    "keywords": ["template", "templates", "模板", "start from template", "create from template"],
+    "aliases": ["用模板创建", "模板怎么用", "template project", "从模板开始"]
+  },
+  {
+    "id": "github",
+    "title": "Import from GitHub",
+    "path": "quickstarts/github.mdx",
+    "url": "/quickstarts/github",
+    "keywords": ["github", "import", "repository", "repo", "clone", "authorize", "导入", "GitHub仓库", "gitlab"],
+    "aliases": ["导入github", "从github导入", "github授权", "github authorization", "import repo"]
+  },
+  {
+    "id": "onboarding",
+    "title": "User Onboarding",
+    "path": "onboarding.mdx",
+    "url": "/onboarding",
+    "keywords": ["onboarding", "user onboarding", "new user onboarding", "新用户引导", "onboarding flow", "引导流程", "personal onboarding", "个人用户引导", "organization onboarding", "企业用户引导", "team onboarding", "团队引导", "usage type", "使用类型", "use case", "使用场景", "first-time setup", "首次设置", "setup wizard", "引导向导"],
+    "aliases": ["new user onboarding", "新用户入门", "onboarding flow", "引导流程", "personal setup flow", "个人引导流程", "enterprise onboarding flow", "企业引导流程", "choose usage type", "选择使用类型", "choose use case", "选择使用场景", "create new org in onboarding", "引导中创建组织", "join organization in onboarding", "引导中加入组织"]
+  },
+  {
+    "id": "project-and-chat",
+    "title": "Projects and Chats",
+    "path": "documentation/working-in-code-banana/project-and-chat.mdx",
+    "url": "/documentation/working-in-code-banana/project-and-chat",
+    "keywords": ["project", "chat", "group chat", "User Guide directory", "invite", "member", "notification", "forward", "restore", "request support", "项目", "群聊", "邀请", "成员", "消息", "转发", "通知"],
+    "aliases": ["怎么创建项目", "邀请成员", "群聊功能", "消息转发", "restore功能", "request support", "怎么请求支持", "@mention", "新消息"]
+  },
+  {
+    "id": "agent-modes",
+    "title": "Agent Modes",
+    "path": "documentation/working-in-code-banana/agent-mode.mdx",
+    "url": "/documentation/working-in-code-banana/agent-mode",
+    "keywords": ["team agent", "my agent", "private agent", "discussion", "agent mode", "chat mode", "ask mode", "coding mode", "agent模式", "聊天模式"],
+    "aliases": ["三个聊天模式", "tab区别", "team agent和my agent区别", "discussion是什么", "agent权限", "谁能用agent", "agent access"]
+  },
+  {
+    "id": "models",
+    "title": "Models",
+    "path": "documentation/working-in-code-banana/models.mdx",
+    "url": "/documentation/working-in-code-banana/models",
+    "keywords": ["model", "claude", "gpt", "deepseek", "gemini", "llm", "openai", "kimi", "doubao", "glm", "qwen", "minimax", "模型", "大模型", "切换模型"],
+    "aliases": ["支持哪些模型", "换模型", "模型选择", "available models", "用哪个模型"]
+  },
+  {
+    "id": "project-viewer",
+    "title": "Project Viewer",
+    "path": "documentation/working-in-code-banana/projectViewer.mdx",
+    "url": "/documentation/working-in-code-banana/projectViewer",
+    "keywords": ["preview", "viewer", "diff", "comment", "annotation", "share", "markdown", "file view", "tab", "预览", "批注", "分享"],
+    "aliases": ["怎么预览", "代码批注", "文件分享", "diff view", "查看文件变更", "comment功能", "文件预览", "查看diff"]
+  },
+  {
+    "id": "basic-info",
+    "title": "Basic Info",
+    "path": "documentation/working-in-code-banana/basicinfo.mdx",
+    "url": "/documentation/working-in-code-banana/basicinfo",
+    "keywords": ["basic info", "agent config", "soul", "identity", "memory", "user", "SOUL", "IDENTITY", "agent configuration", "agent设置", "system prompt"],
+    "aliases": ["agent基本设置", "soul是什么", "identity设置", "memory配置", "agent人设", "agent性格", "agent行为", "basic info配置"]
+  },
+  {
+    "id": "imsetting",
+    "title": "Channel (IM Settings)",
+    "path": "documentation/working-in-code-banana/imsetting.mdx",
+    "url": "/documentation/working-in-code-banana/imsetting",
+    "keywords": ["channel", "im", "bot", "feishu", "telegram", "slack", "discord", "dingtalk", "wecom", "qq", "mattermost", "飞书", "钉钉", "企业微信", "机器人"],
+    "aliases": ["接入飞书", "slack bot", "telegram bot", "Discord", "DingTalk", "WeCom", "QQ", "IM集成", "外部聊天工具", "绑定bot", "im机器人", "channel设置"]
+  },
+  {
+    "id": "skills",
+    "title": "Skills",
+    "path": "documentation/working-in-code-banana/skills.mdx",
+    "url": "/documentation/working-in-code-banana/skills",
+    "keywords": ["skill", "skills", "skill market", "SKILL.md", "publish", "add to project", "reusable", "技能", "技能市场"],
+    "aliases": ["skill是什么", "怎么用skill", "发布skill", "创建skill", "skill market怎么用", "add skill to project", "skill复用"]
+  },
+  {
+    "id": "cron-job",
+    "title": "Cron Job",
+    "path": "documentation/working-in-code-banana/cron-job.mdx",
+    "url": "/documentation/working-in-code-banana/cron-job",
+    "keywords": ["cron job", "heartbeat", "scheduled task", "file watch", "automation", "interval", "定时任务", "心跳", "自动触发", "HEARTBEAT.md"],
+    "aliases": ["定时执行", "自动执行任务", "周期任务", "heartbeat怎么用", "file watch触发", "定时任务怎么配置"]
+  },
+  {
+    "id": "dev-tools",
+    "title": "Dev Tools",
+    "path": "documentation/working-in-code-banana/dev-tools.mdx",
+    "url": "/documentation/working-in-code-banana/dev-tools",
+    "keywords": ["terminal", "service", "git status", "deploy", "port", "git commit", "vm", "开发工具", "终端", "部署", "端口", "git"],
+    "aliases": ["怎么用terminal", "查看端口", "git提交", "deploy怎么用", "vm重启", "kill端口", "commit代码", "部署项目"]
+  },
+  {
+    "id": "account",
+    "title": "Managing your Account",
+    "path": "documentation/account-and-subscriptions/account.mdx",
+    "url": "/documentation/account-and-subscriptions/account",
+    "keywords": ["account", "profile", "External Contacts", "External Friends", "Organization Contacts", "avatar", "usage", "contacts", "pay-as-you-go", "个人中心", "头像", "用量", "账号", "联系人"],
+    "aliases": ["修改头像", "怎么查看用量", "联系人", "内部成员", "外部联系人", "外部好友", "个人设置", "账号管理", "usage页面", "pay as you go开启"]
+  },
+  {
+    "id": "billing-plan",
+    "title": "Billing & Plan",
+    "path": "documentation/account-and-subscriptions/billing-plan.mdx",
+    "url": "/documentation/account-and-subscriptions/billing-plan",
+    "keywords": ["billing", "plan", "free", "personal", "professional", "request", "token", "pay-as-you-go", "upgrade", "subscription", "promo code", "计费", "套餐", "充值", "订阅", "请求数"],
+    "aliases": ["怎么升级套餐", "免费版有多少请求", "request是什么", "token计费", "promo code怎么用", "年付月付", "套餐价格"]
+  },
+  {
+    "id": "organization",
+    "title": "Organization",
+    "path": "documentation/teams/org.mdx",
+    "url": "/documentation/teams/org",
+    "keywords": ["organization", "org", "organization management", "组织管理", "organization structure", "组织架构", "department", "部门", "member management", "成员管理", "owner", "admin", "export structure", "导出组织架构", "export members", "导出成员", "batch import", "批量导入", "remove member", "移除成员", "join request", "加入申请"],
+    "aliases": ["组织管理", "组织架构管理", "部门管理", "成员管理", "批量导入组织", "批量导入成员", "批量导出组织", "批量导出成员", "owner权限", "admin权限", "审批加入组织", "删除成员", "移除成员", "邀请组织成员", "组织设置"]
+  },
+  {
+    "id": "team-plan",
+    "title": "Team Plan",
+    "path": "documentation/teams/teamplan.mdx",
+    "url": "/documentation/teams/teamplan",
+    "keywords": ["team plan", "team", "admin", "seat", "prepaid", "postpaid", "billing", "vm tier", "upgrade", "downgrade", "团队计划", "团队套餐", "管理员", "席位"],
+    "aliases": ["团队套餐怎么用", "给成员开team plan", "seat fee", "团队计费", "vm配置", "按量计费限额", "upgrade team plan", "差价计算"]
+  },
+  {
+    "id": "cbbot-introduction",
+    "title": "CodeBanana Bot",
+    "path": "documentation/cbbot/introduction.mdx",
+    "url": "/documentation/cbbot/introduction",
+    "keywords": ["cbbot","bot","bot客户端","desktop agent","本地agent","下载安装","权限配置","本地项目","bot skill","file watch","keep awake","屏幕感知","浏览器控制","本地系统操控","辅助功能","完全磁盘访问","屏幕录制","数据同步"],
+    "aliases": ["cbbot是什么","bot客户端介绍","下载bot","安装cbbot","bot和web的区别","本地agent是什么","怎么安装bot","bot权限怎么配置","bot专属skill","本地项目离线","keep awake怎么开","bot支持哪些系统"]
+  },
+  {
+    "id": "super-org",
+    "title": "Super Organization",
+    "path": "super-org.mdx",
+    "url": "/super-org",
+    "keywords": ["超级组织","super org","产品理念","为什么用CodeBanana","CodeBanana vs Cursor","CodeBanana vs Claude Code","任务与沟通合一","Agent为主体","出门问问","团队协作","组织转型","全栈","AI Native"],
+    "aliases": ["CodeBanana和Cursor有什么区别","为什么不用Cursor","CodeBanana是做什么的","超级组织是什么","出门问问怎么用AI","产能翻四倍","人少了产能翻了"]
+  }
+]

@@ -1,0 +1,22 @@
+# Python
+*.pyc
+__pycache__/
+
+# Secrets
+.env
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Data
+data/logs/
+
+# Media
+*.mp4
+*.avi
+
+# IDE
+.vscode/
+.idea/

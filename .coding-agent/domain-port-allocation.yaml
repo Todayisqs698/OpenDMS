@@ -1,0 +1,13 @@
+allocated_at: '2026-07-17T23:50:30.133913'
+allocations:
+- allocated_at: '2026-07-17T23:50:30.133928'
+  domain: app-preview-b15f46ab6f4ecd7df076788d79c38cf7.codebanana.com
+  name: app4
+  port: 8004
+- allocated_at: '2026-07-17T23:50:30.133933'
+  domain: app-preview-a49474e34ccb18460279bae82e909cad.codebanana.com
+  name: app5
+  port: 8005
+schema_version: '2.0'
+workspace_hash: 595fd10acf994b44b5fcbc5ac263696d
+workspace_path: /data/coda/dr4awfq4/ws/8f508ca3-b780-4384-ba2d-e9147f53e377
