@@ -699,9 +699,18 @@ def search_attractions(
 
 
 def _get_current_gps() -> dict:
-    """从后端全局状态读取当前 GPS 坐标"""
+    """读取当前 GPS 坐标：优先 LocationStore，降级 main._current_gps"""
+    # 优先从 LocationStore 读取（线程安全，NavPanel 浏览器 GPS 写入）
     try:
-        # 延迟导入，避免循环依赖
+        from modules.ai.location_store import get_location_store
+        store = get_location_store()
+        lat, lon = store.get_coords()
+        if lat is not None and lon is not None:
+            return {"lat": lat, "lon": lon, "source": "location_store"}
+    except Exception:
+        pass
+    # 降级：从 main._current_gps 读取（旧路径）
+    try:
         import importlib
         main_mod = importlib.import_module("main")
         gps = getattr(main_mod, "_current_gps", {})
@@ -738,157 +747,35 @@ def _reverse_geocode(lng: float, lat: float) -> str:
 
 def start_navigation(destination: str, city: str = "") -> dict:
     """
-    启动导航到指定目的地，使用高德地图路线规划 API。
-    起点使用浏览器上报的真实 GPS 位置；若无 GPS 则回退到 IP 定位。
-
-    Args:
-        destination: 目的地名称（如"故宫博物院"）
-        city: 目的地所在城市（如"北京"），可选
-
-    Returns:
-        {"success": bool, "destination": str, "origin": str, "distance_km": float,
-         "duration_min": int, "route_summary": str, "coords": dict, "map_url": str}
+    启动导航到指定目的地。
+    主力：免费 OSRM 路线 + Nominatim 地理编码（无需任何 API Key），含离线地标表降级。
+    增强：高德深链（有 Key 时附上 amap_nav_url，可一键跳转高德 App）。
     """
-    amap_key = _get_amap_key()
-    if not amap_key:
-        logger.warning("start_navigation: AMAP_API_KEY 未配置")
-        return {"success": False, "error": "高德地图 API Key 未配置", "destination": destination}
+    # Step 1: 获取起点坐标
+    gps = _get_current_gps()
+    from_lat = float(gps["lat"]) if gps and gps.get("lat") else None
+    from_lon = float(gps["lon"]) if gps and gps.get("lon") else None
 
+    # Step 2: 用免费 NavigationService 规划路线（OSRM + Nominatim + 离线降级）
+    from modules.ai.navigation_service import get_navigation_service
+    nav = get_navigation_service()
+    result = nav.plan(from_lat, from_lon, destination)
+
+    # Step 3: 高德深链增强（有 Key 时附上，可一键跳转 App）
     try:
-        # Step 1: 目的地地理编码
-        addr = f"{city}{destination}" if city else destination
-        geo_url = "https://restapi.amap.com/v3/geocode/geo"
-        geo_resp = httpx.get(geo_url, params={
-            "address": addr, "key": amap_key,
-        }, timeout=8.0)
-        geo_data = geo_resp.json()
+        amap_key = _get_amap_key()
+        if amap_key and result.get("success") and result.get("destination_coords"):
+            dest = result["destination_coords"]
+            result["amap_nav_url"] = (
+                f"https://uri.amap.com/navigation"
+                f"?from={from_lon or 116.397428},{from_lat or 39.90923},起点"
+                f"&to={dest[1]},{dest[0]},{result['destination']}"
+                f"&mode=car&src=EdgeGuard&coordinate=gcj02&callnative=0"
+            )
+    except Exception:
+        pass
 
-        if geo_data.get("status") != "1" or not geo_data.get("geocodes"):
-            return {"success": False, "error": f"无法找到目的地: {destination}", "destination": destination}
-
-        dest_location = geo_data["geocodes"][0].get("location", "")  # "lng,lat"
-        dest_name = geo_data["geocodes"][0].get("formatted_address", destination)
-        if not dest_location:
-            return {"success": False, "error": "目的地坐标为空", "destination": destination}
-
-        # Step 2: 确定起点 — 优先使用浏览器 GPS，回退到高德 IP 定位
-        gps = _get_current_gps()
-        if gps:
-            origin = f"{gps['lon']},{gps['lat']}"
-            origin_name = _reverse_geocode(gps["lon"], gps["lat"])
-            logger.info(f"start_navigation: 使用 GPS 起点 {origin} ({origin_name})")
-        else:
-            # IP 定位回退
-            try:
-                ip_resp = httpx.get(
-                    "https://restapi.amap.com/v3/ip",
-                    params={"key": amap_key},
-                    timeout=5.0,
-                )
-                ip_data = ip_resp.json()
-                ip_location = ip_data.get("rectangle", "")
-                if ip_location:
-                    # rectangle 格式: "lng1,lat1;lng2,lat2" → 取中心点
-                    coords = ip_location.replace(";", ",").split(",")
-                    center_lng = (float(coords[0]) + float(coords[2])) / 2
-                    center_lat = (float(coords[1]) + float(coords[3])) / 2
-                    origin = f"{center_lng},{center_lat}"
-                    origin_name = ip_data.get("city", "当前位置") or "当前位置"
-                    logger.info(f"start_navigation: IP 定位起点 {origin} ({origin_name})")
-                else:
-                    origin = "116.397428,39.90923"
-                    origin_name = "北京天安门（默认）"
-            except Exception:
-                origin = "116.397428,39.90923"
-                origin_name = "北京天安门（默认）"
-
-        # Step 3: 路线规划（驾车）
-        route_url = "https://restapi.amap.com/v3/direction/driving"
-        route_resp = httpx.get(route_url, params={
-            "origin": origin, "destination": dest_location,
-            "key": amap_key, "extensions": "all",
-        }, timeout=8.0)
-        route_data = route_resp.json()
-
-        if route_data.get("status") != "1":
-            return {"success": False, "error": f"路线规划失败: {route_data.get('info', '')}", "destination": destination}
-
-        route = route_data.get("route", {})
-        paths = route.get("paths", [])
-        if not paths:
-            return {"success": False, "error": "未找到可用路线", "destination": destination}
-
-        path = paths[0]
-        distance_m = int(path.get("distance", 0))
-        duration_s = int(path.get("duration", 0))
-        distance_km = round(distance_m / 1000, 1)
-        duration_min = round(duration_s / 60)
-
-        # 提取途经道路
-        steps = path.get("steps", [])
-        road_names = []
-        for step in steps[:5]:
-            road = step.get("instruction", "")
-            if road:
-                road_names.append(road[:20])
-
-        route_summary = " → ".join(road_names) if road_names else "路线已规划"
-
-        # Step 4: 生成静态地图 URL（用现有 Web Service Key）
-        # 提取路线 polyline 坐标（取前 40 个点避免 URL 过长）
-        polyline_points = []
-        for step in steps:
-            step_polyline = step.get("polyline", "")
-            if step_polyline:
-                points = step_polyline.split(";")
-                polyline_points.extend(points[:8])  # 每步取前 8 个点
-
-        # 限制总点数
-        if len(polyline_points) > 60:
-            stride = len(polyline_points) // 60
-            polyline_points = polyline_points[::stride]
-
-        # 静态地图：起点标记 + 终点标记 + 路线
-        markers = f"mid,0x22c55e,A:{origin}|mid,0xef4444,B:{dest_location}"
-        # 高德静态地图的 path 参数格式
-        map_url = (
-            f"https://restapi.amap.com/v3/staticmap"
-            f"?key={amap_key}"
-            f"&size=600*350"
-            f"&zoom=11"
-            f"&markers={markers}"
-            f"&paths=2,0x2563eb,1,0x2563eb,:"
-            f"{';'.join(polyline_points[:60])}"
-        )
-
-        # 高德地图 URI（点击跳转到高德地图 App/网页版导航）
-        amap_nav_url = (
-            f"https://uri.amap.com/navigation"
-            f"?from={origin},{origin_name}"
-            f"&to={dest_location},{dest_name}"
-            f"&mode=car&src=EdgeGuard&coordinate=gcj02&callnative=0"
-        )
-
-        return {
-            "success": True,
-            "destination": dest_name,
-            "origin": origin_name,
-            "distance_km": distance_km,
-            "duration_min": duration_min,
-            "route_summary": route_summary,
-            "coords": {"origin": origin, "destination": dest_location},
-            "map_url": map_url,
-            "amap_nav_url": amap_nav_url,
-        }
-
-    except httpx.TimeoutException:
-        logger.error("start_navigation: 高德 API 请求超时")
-        return {"success": False, "error": "导航路线规划超时", "destination": destination}
-    except Exception as e:
-        logger.error(f"start_navigation 执行异常: {e}")
-        return {"success": False, "error": str(e), "destination": destination}
-
-
+    return result
 def plan_trip(city: str, days: int = 1, preference: Optional[str] = None) -> dict:
     """
     生成结构化行程规划，借鉴 hello-agents trip-planner 数据模型。

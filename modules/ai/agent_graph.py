@@ -53,6 +53,29 @@ from modules.ai.safety_gate import apply_safety_gate, get_risk_level_from_safety
 from modules.ai.memory import AgentMemory
 from modules.ai.deepseek_client import deepseek_client
 
+# ── 全局驾驶员状态机（由 app.py 摄像头循环实时更新）──
+from modules.ai.driver_state_machine import DriverStateMachine
+
+_driver_state_machine = DriverStateMachine()
+
+
+def update_sensor_data(sensor_data: dict) -> str:
+    """
+    供 app.py 摄像头循环调用的传感器数据更新接口。
+    将 7 维传感器数据喂入 DriverStateMachine，返回当前状态。
+    """
+    return _driver_state_machine.update(sensor_data)
+
+
+def get_driver_state() -> dict:
+    """获取当前驾驶员状态快照（供 API 端点查询）"""
+    return {
+        "state": _driver_state_machine.get_state(),
+        "risk_score": _driver_state_machine.get_risk_score(),
+        "trend": _driver_state_machine.get_trend(),
+        "vector": _driver_state_machine.get_vector(),
+    }
+
 # ================================================================
 #  状态定义
 # ================================================================
@@ -159,13 +182,31 @@ def _apply_node_output(state: dict, updates: dict) -> None:
 
 def perceive_node(state: dict) -> dict:
     """
-    感知节点：读取传感器状态，调用 SafetyAgent 获取 risk_level，
-    调用 apply_safety_gate 获取 allowed_tools，更新 state。
+    感知节点：优先从 DriverStateMachine 读取 7 维状态向量 + 趋势预测，
+    降级到 SafetyAgent 单点判断（无传感器数据时）。
     """
     driver_state = state.get("driver_state") or {}
 
-    # 调用 SafetyAgent 获取风险等级
-    risk_level = get_risk_level_from_safety_agent(driver_state)
+    # 优先使用 DriverStateMachine（有历史数据时）
+    if _driver_state_machine.history:
+        risk_level = _driver_state_machine.get_state()
+        trend = _driver_state_machine.get_trend()
+        risk_score = _driver_state_machine.get_risk_score()
+
+        # 将趋势信息注入 driver_state，供 safety_gate 模板使用
+        driver_state = {
+            **driver_state,
+            "risk_score": risk_score,
+            "trend": trend,
+        }
+        logger.info(
+            "Perceive (DSM): risk_level=%s, score=%.3f, trend=%s",
+            risk_level, risk_score, trend,
+        )
+    else:
+        # 降级：无传感器历史数据，用 SafetyAgent 单点判断
+        risk_level = get_risk_level_from_safety_agent(driver_state)
+        logger.info("Perceive (fallback SafetyAgent): risk_level=%s", risk_level)
 
     # 应用安全门控，获取过滤后的工具列表和安全提示
     gate_result = apply_safety_gate(risk_level, TOOL_SCHEMAS, driver_state=driver_state)
@@ -192,7 +233,12 @@ def safety_gate_node(state: dict) -> dict:
     此节点保留用于图结构扩展或独立调用。
     """
     driver_state = state.get("driver_state") or {}
-    risk_level = get_risk_level_from_safety_agent(driver_state)
+
+    if _driver_state_machine.history:
+        risk_level = _driver_state_machine.get_state()
+    else:
+        risk_level = get_risk_level_from_safety_agent(driver_state)
+
     gate_result = apply_safety_gate(risk_level, TOOL_SCHEMAS, driver_state=driver_state)
 
     return {

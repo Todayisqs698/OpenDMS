@@ -74,20 +74,39 @@ def health():
 
 @app.get("/api/tts")
 async def tts(text: str = ""):
-    """神经网络语音合成 — 免费微软公开API，接近真人"""
+    """语音合成 — 优先 edge_tts 神经网络语音，降级 pyttsx3 本地引擎"""
     if not text:
         return {"error": "no text"}
-    import edge_tts, tempfile, os
-    tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
-    tmp.close()
+    import tempfile, os
+
+    # Level 1: edge_tts（神经网络语音，质量最高）
     try:
+        import edge_tts
+        tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+        tmp.close()
         communicate = edge_tts.Communicate(text, "zh-CN-XiaoxiaoNeural")
         await communicate.save(tmp.name)
         from fastapi.responses import FileResponse
         return FileResponse(tmp.name, media_type="audio/mpeg",
                            headers={"Cache-Control": "no-cache"})
     except Exception as e:
-        return {"error": str(e)[:100]}
+        logger.warning(f"edge_tts 失败，降级到 pyttsx3: {e}")
+
+    # Level 2: pyttsx3（本地引擎，离线可用）
+    try:
+        import pyttsx3
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp.close()
+        engine = pyttsx3.init()
+        engine.setProperty('rate', 160)
+        engine.setProperty('volume', 0.9)
+        engine.save_to_file(text, tmp.name)
+        engine.runAndWait()
+        from fastapi.responses import FileResponse
+        return FileResponse(tmp.name, media_type="audio/wav",
+                           headers={"Cache-Control": "no-cache"})
+    except Exception as e:
+        return {"error": f"TTS 引擎均不可用: {str(e)[:100]}"}
 
 
 @app.get("/api/camera/frame")
@@ -149,7 +168,7 @@ def camera_frame(landmarks: str = "1"):
 
 @app.get("/api/status")
 def status():
-    """AI 模块加载状态 + 网络状态"""
+    """AI 模块加载状态 + 网络状态 + 驾驶员状态"""
     from modules.ai.edge_cloud_router import get_router
     router = get_router()
     # 主动检测网络连通性
@@ -170,7 +189,17 @@ def status():
             "environment": _check_agent("environment"),
         },
         "perception_available": _check_perception(),
+        "driver_state": _get_driver_state_safe(),
     }
+
+
+def _get_driver_state_safe() -> dict:
+    """安全读取 DriverStateMachine 当前状态"""
+    try:
+        from modules.ai.agent_graph import get_driver_state
+        return get_driver_state()
+    except Exception:
+        return {}
 
 
 class AnalyzeRequest(BaseModel):
@@ -284,6 +313,15 @@ async def analyze(req: AnalyzeRequest):
     from modules.ai.fallback_handler import handle_fallback
     from modules.ai.langgraph_orchestrator import Orchestrator
     import time
+
+    # 更新 DriverStateMachine（供 Agent perceive_node 使用）
+    try:
+        from modules.ai.agent_graph import update_sensor_data
+        update_sensor_data({
+            "gaze_direction": req.gaze_state,
+        })
+    except Exception:
+        pass
 
     router = get_router()
     orchestrator = Orchestrator()
@@ -621,6 +659,37 @@ async def environment(city: str = "", lat: float = None, lon: float = None):
 
     result = await asyncio.get_running_loop().run_in_executor(None, agent.analyze, params)
 
+    return {"status": "ok", "data": result}
+
+
+@app.post("/api/environment")
+def environment_post(req: EnvironmentRequest):
+    """
+    环境分析（POST 版本，支持 GPS 坐标自动反查城市）。
+    NavPanel 前端通过此端点根据 GPS 坐标获取天气+驾驶建议。
+    """
+    from modules.ai.agents.environment_agent import EnvironmentAgent
+    from modules.ai.location_store import get_location_store
+
+    loc = get_location_store()
+    lat = req.lat
+    lon = req.lon
+    if lat is None or lon is None:
+        glat, glon = loc.get_coords()
+        if glat is not None:
+            lat, lon = glat, glon
+
+    agent = EnvironmentAgent()
+    params = {}
+    if req.city:
+        params["city"] = req.city
+    if lat is not None and lon is not None:
+        params["lat"] = lat
+        params["lon"] = lon
+        # 写入 LocationStore 供导航使用
+        loc.update(lat=lat, lon=lon, city=req.city)
+
+    result = agent.analyze(params)
     return {"status": "ok", "data": result}
 
 
@@ -1020,6 +1089,72 @@ def prompts_export_md():
     from modules.ai.prompts import export_markdown
     from fastapi.responses import PlainTextResponse
     return PlainTextResponse(export_markdown(), media_type="text/markdown")
+
+
+# ── 导航路线规划（免费 API：Nominatim + OSRM，无需 Key）──
+
+class NavRouteRequest(BaseModel):
+    destination: str = ""
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+
+@app.post("/api/navigation/route")
+def nav_route(req: NavRouteRequest):
+    """规划从当前位置到目的地的驾车路线。免费 API，零依赖。"""
+    from modules.ai.navigation_service import get_navigation_service
+
+    svc = get_navigation_service()
+    result = svc.plan(req.lat, req.lon, req.destination)
+
+    # 推送结构化导航数据到前端
+    try:
+        asyncio.run_coroutine_threadsafe(
+            ws_manager.broadcast({"type": "navigation", "data": result}),
+            asyncio.get_running_loop(),
+        )
+    except RuntimeError:
+        pass  # 不在事件循环中，跳过推送
+
+    return result
+
+
+# ── GPS 位置上报 ──
+
+class LocationRequest(BaseModel):
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    city: Optional[str] = None
+
+
+class EnvironmentRequest(BaseModel):
+    city: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+
+@app.post("/api/location")
+def update_location(req: LocationRequest):
+    """接收前端/移动端上报的 GPS 位置，写入全局位置存储。"""
+    from modules.ai.location_store import get_location_store
+
+    store = get_location_store()
+    snap = store.update(lat=req.lat, lon=req.lon, city=req.city)
+    logger.info(f"GPS 位置更新: lat={snap.get('lat')}, lon={snap.get('lon')}, city={snap.get('city')}")
+    return {"status": "ok", "location": snap}
+
+
+# ── 导航面板 WebSocket ──
+
+@app.websocket("/ws/navpanel")
+async def websocket_navpanel(websocket: WebSocket):
+    """导航面板专用 WebSocket：推送环境数据 + 导航结果。"""
+    await ws_manager.connect(websocket, "navpanel")
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        ws_manager.disconnect("navpanel")
 
 
 if __name__ == "__main__":

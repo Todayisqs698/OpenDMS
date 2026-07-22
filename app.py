@@ -34,6 +34,14 @@ from modules.ai.langgraph_orchestrator import Orchestrator
 from modules.ai.local_decision_engine import decide_locally
 from modules.ai.fallback_handler import handle_fallback
 
+# DriverStateMachine 接入：app.py 摄像头循环 → 状态机 → Agent perceive_node
+try:
+    from modules.ai.agent_graph import update_sensor_data, get_driver_state
+    _dsm_ok = True
+except Exception as e:
+    logger.warning(f"agent_graph 状态机接口加载失败(不影响主流程): {e}")
+    _dsm_ok = False
+
 # multimodal_collector 在 Windows 下可能因 emoji 打印报错，容错导入
 try:
     from modules.ai.multimodal_collector import multimodal_collector
@@ -131,10 +139,38 @@ class EdgeGuardApp:
         """多模态事件回调 → 路由 → 编排 → 响应"""
         self.stats["ai_requests"] += 1
 
-        # Step 1: 边缘-云端路由
+        context_type = multimodal_input.context.get("type", "")
+        gaze_state = multimodal_input.gaze_data.get("state", "center")
+        gaze_duration = multimodal_input.gaze_data.get("duration", 0)
+
+        # ── 分心/疲劳事件 → 走 ReAct Agent 安全门控 ──
+        # 让 perceive_node 从 DriverStateMachine 读取趋势，dangerous 时短路告警
+        if context_type in ("distraction_detected", "fatigue_composite") or \
+           (gaze_state != "center" and gaze_duration > 3.0):
+            logger.info("安全事件 → ReAct Agent: type=%s, gaze=%s, dur=%.1f",
+                        context_type, gaze_state, gaze_duration)
+            try:
+                import requests
+                requests.post(
+                    "http://127.0.0.1:8000/api/agent/chat",
+                    json={
+                        "text": f"[系统检测] 视线偏离 {gaze_state} {gaze_duration:.0f}秒，请注意前方道路",
+                        "driver_state": {
+                            "gaze": gaze_state,
+                            "gaze_duration": gaze_duration,
+                        },
+                    },
+                    timeout=10,
+                )
+                self.stats["agent_safety"] = self.stats.get("agent_safety", 0) + 1
+                return
+            except Exception as e:
+                logger.warning("Agent 安全路由失败，降级到原有路径: %s", e)
+
+        # Step 1: 边缘-云端路由（原有路径）
         route = self.router.route({
             "trigger": multimodal_input.context.get("trigger", ""),
-            "type": multimodal_input.context.get("type", ""),
+            "type": context_type,
         })
 
         if route == "local":
@@ -142,8 +178,8 @@ class EdgeGuardApp:
             result = decide_locally({
                 "trigger": multimodal_input.context.get("trigger", ""),
                 "data": {
-                    "state": multimodal_input.gaze_data.get("state"),
-                    "duration": multimodal_input.gaze_data.get("duration", 0),
+                    "state": gaze_state,
+                    "duration": gaze_duration,
                     "gesture": multimodal_input.gesture_data.get("gesture"),
                     "confidence": multimodal_input.gesture_data.get("confidence"),
                     "text": multimodal_input.speech_data.get("text"),
@@ -353,6 +389,24 @@ class EdgeGuardApp:
                     last_gaze = gaze
                 gaze_dur = now - gaze_start if gaze != "center" else 0
 
+                # ── 喂入 DriverStateMachine（7 维状态向量 + 趋势预测）──
+                if _dsm_ok and face:
+                    head_pose = face_tracker.head_pose()
+                    update_sensor_data({
+                        "gaze_direction": gaze,
+                        "head_pitch": head_pose.get("pitch", 0),
+                        "head_yaw": head_pose.get("yaw", 0),
+                        "perclos": face_tracker.perclos,
+                        "blink_rate": face_tracker.blink_count,
+                    })
+
+                # ── 喂入 MultimodalCollector（分心检测 + 恢复确认）──
+                if multimodal_collector:
+                    multimodal_collector.update_gaze_data({
+                        "state": gaze,
+                        "duration": gaze_dur,
+                    })
+
                 # ── 手势识别（每 3 帧一次）──
                 gesture_name = ""
                 gesture_conf = 0.0
@@ -362,6 +416,13 @@ class EdgeGuardApp:
                     if gname:
                         gesture_name = gname
                         gesture_conf = gconf
+
+                # ── 手势喂入 MultimodalCollector ──
+                if multimodal_collector and gesture_name:
+                    multimodal_collector.update_gesture_data({
+                        "gesture": gesture_name,
+                        "conf": gesture_conf,
+                    })
 
                 # ── AI 决策 ──
                 trigger = "gaze"
@@ -374,6 +435,10 @@ class EdgeGuardApp:
                     trigger = "speech"
                     # 用完即清，避免重复触发
                     self._speech_text = ""
+
+                # ── 语音喂入 MultimodalCollector ──
+                if multimodal_collector and speech_text:
+                    multimodal_collector.update_speech_data({"text": speech_text})
 
                 result = decide_locally({
                     "trigger": trigger,

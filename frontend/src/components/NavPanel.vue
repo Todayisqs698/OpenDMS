@@ -1,6 +1,6 @@
-﻿<template>
+<template>
   <section class="panel nav-panel">
-    <h2 class="panel-title">导航 & 环境</h2>
+    <h2 class="panel-title">🗺️ 导航 & 环境</h2>
 
     <!-- 加载中 -->
     <div v-if="!envData" class="placeholder">
@@ -8,17 +8,64 @@
       <span>环境数据加载中...</span>
     </div>
 
-    <!-- 数据就绪 -->
     <div v-else class="env-content">
       <!-- 时间 + 日期 -->
-      <div class="env-section time-section">
+      <div class="time-section">
         <div class="env-time">{{ currentTime }}</div>
         <div class="env-date">{{ currentDate }}</div>
       </div>
 
       <div class="env-divider"></div>
 
-      <!-- 天气卡片（参考 QML weatherCard 设计）-->
+      <!-- 地图（Leaflet + 高德瓦片）-->
+      <div class="map-wrapper">
+        <div ref="mapEl" class="map-container"></div>
+        <div class="map-tip">点击地图任意位置 = 设置为当前位置 → 天气自动更新</div>
+      </div>
+
+      <div class="env-divider"></div>
+
+      <!-- 当前位置信息 -->
+      <div class="location-info">
+        <div class="location-row">
+          <span class="loc-icon">📍</span>
+          <span class="loc-text">{{ envData.city || '--' }}</span>
+          <span class="loc-coord">{{ currentLat.toFixed(4) }}, {{ currentLon.toFixed(4) }}</span>
+        </div>
+        <div class="location-row" v-if="routeInfo">
+          <span class="loc-icon">🚗</span>
+          <span class="loc-text">→ {{ routeInfo.destination }}</span>
+          <span class="loc-coord">{{ routeInfo.distance }}km / {{ routeInfo.duration }}min</span>
+        </div>
+      </div>
+
+      <!-- 实时定位控制 -->
+      <div class="gps-controls">
+        <button class="gps-btn gps-btn-once" @click="getMyLocationOnce" :disabled="locating">
+          {{ locating ? '定位中...' : '📍 定位一次' }}
+        </button>
+        <button class="gps-btn" :class="tracking ? 'gps-btn-stop' : 'gps-btn-track'" @click="toggleTracking">
+          {{ tracking ? '⏸ 停止追踪' : '🛰️ 实时追踪' }}
+        </button>
+      </div>
+      <div class="gps-status" v-if="gpsStatus">
+        <span :class="['gps-dot', gpsStatusType]"></span>
+        <span>{{ gpsStatus }}</span>
+      </div>
+
+      <div class="env-divider"></div>
+
+      <!-- 路径规划 -->
+      <div class="route-input">
+        <input v-model="destination" type="text" class="route-field" placeholder="目的地（如 北京天安门）" @keyup.enter="planRoute" />
+        <button class="route-btn" @click="planRoute" :disabled="!destination.trim() || planning">
+          {{ planning ? '...' : '导航' }}
+        </button>
+      </div>
+
+      <div class="env-divider"></div>
+
+      <!-- 天气卡片（基于当前 GPS 位置）-->
       <div class="weather-card" :class="'weather-' + (envData.weather_icon || 'unknown')">
         <div class="weather-main">
           <span class="weather-emoji">{{ envData.weather_emoji || weatherEmoji }}</span>
@@ -26,14 +73,12 @@
         </div>
         <div class="weather-detail">
           <span class="weather-desc">{{ weatherLabel }}</span>
-          <span class="weather-city">{{ envData.city || '--' }} <span class="loc-dot" :class="'loc-' + locationStatus" :title="locationHint">{{ locIcon }}</span></span>
+          <span class="weather-city">实时跟随 GPS</span>
         </div>
       </div>
 
-      <div class="env-divider"></div>
-
       <!-- 详细环境数据 -->
-      <div class="env-section env-details">
+      <div class="env-details">
         <div class="env-row">
           <span class="env-label">💧 湿度</span>
           <span class="env-value">{{ envData.humidity != null ? envData.humidity + '%' : '--' }}</span>
@@ -47,78 +92,42 @@
           <span class="env-value">{{ envData.visibility != null ? envData.visibility + ' km' : '--' }}</span>
         </div>
         <div class="env-row" v-if="envData.risk_score != null">
-          <span class="env-label">⚠️ 风险指数</span>
+          <span class="env-label">⚠️ 风险</span>
           <span class="env-value" :class="riskClass">{{ riskDisplay }}</span>
         </div>
       </div>
 
       <div class="env-divider"></div>
 
-      <!-- 驾驶建议（参考 QML driverCard 设计）-->
-      <div class="env-section">
-        <div class="env-context" :class="contextClass">
-          <span class="context-icon">🚗</span>
-          <span>{{ envData.driving_context || '路况正常' }}</span>
-        </div>
+      <!-- 驾驶建议 -->
+      <div class="env-context" :class="contextClass">
+        <span class="context-icon">🚗</span>
+        <span>{{ envData.driving_context || '路况正常' }}</span>
       </div>
 
-      <!-- 预警列表（带动画）-->
-      <div class="env-section alerts-section" v-if="envData.alerts && envData.alerts.length > 0">
+      <!-- 预警列表 -->
+      <div class="alerts-section" v-if="envData.alerts && envData.alerts.length > 0">
         <TransitionGroup name="alert">
           <div class="env-alert" v-for="(alert, i) in envData.alerts" :key="i"
-            :class="'alert-' + (alert.level || 'info')">
+               :class="'alert-' + (alert.level || 'info')">
             <span class="alert-icon">{{ alert.icon || (alert.level === 'warning' ? '⚠️' : 'ℹ️') }}</span>
             <span class="alert-text">{{ alert.text }}</span>
           </div>
         </TransitionGroup>
       </div>
 
-      <!-- 驾驶员状态指示器（新增，参考 QML driverState）-->
+      <!-- 状态指示 -->
       <div class="env-divider"></div>
-      <div class="driver-status" :class="'status-' + driverStatus">
-        <span class="driver-icon">
-          {{ driverStatus === 'dangerous' ? '⚠️' : driverStatus === 'distracted' ? '👀' : '✅' }}
-        </span>
-        <span class="driver-text">{{ driverStatusText }}</span>
+      <div class="status-row">
+        <span :class="['status-dot', envData.weather ? 'ok' : 'warn']"></span>
+        <span class="status-text">{{ statusText }}</span>
       </div>
-
-      <!-- 导航路线卡片 -->
-      <Transition name="nav-slide">
-        <div v-if="navRoute" class="nav-route-card">
-          <div class="nav-header">
-            <span class="nav-icon">🧭</span>
-            <span class="nav-title">导航路线</span>
-            <button class="nav-close" @click="navRoute = null">✕</button>
-          </div>
-          <div class="nav-dest">
-            <span class="nav-from">📍 {{ navRoute.origin || '当前位置' }}</span>
-            <span class="nav-arrow">→</span>
-            <span class="nav-to">🎯 {{ navRoute.destination }}</span>
-          </div>
-          <div class="nav-stats">
-            <span class="nav-stat">📏 {{ navRoute.distance_km }} km</span>
-            <span class="nav-stat">⏱️ {{ navRoute.duration_min }} 分钟</span>
-          </div>
-          <div class="nav-roads" v-if="navRoute.route_summary">{{ navRoute.route_summary }}</div>
-          <!-- 静态地图 -->
-          <div class="nav-map-container" v-if="navRoute.map_url && !mapError">
-            <img :src="navRoute.map_url" alt="路线地图" class="nav-map-img" @error="onMapError" />
-            <div class="nav-map-legend">
-              <span class="legend-item"><span class="legend-dot legend-start"></span>起点</span>
-              <span class="legend-item"><span class="legend-dot legend-end"></span>终点</span>
-            </div>
-          </div>
-          <a v-if="navRoute.amap_nav_url" :href="navRoute.amap_nav_url" target="_blank" class="nav-open-amap">
-            🗺️ 在高德地图中打开
-          </a>
-        </div>
-      </Transition>
     </div>
   </section>
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 
 defineProps({ data: Object })
 
@@ -137,97 +146,237 @@ function updateClock() {
 
 // ── 环境数据 ──
 const envData = ref(null)
-const navRoute = ref(null)  // 导航路线数据
-const mapError = ref(false)  // 静态地图加载失败
-const locationStatus = ref('idle')  // idle | locating | located | failed
-const locIcon = computed(() => ({ idle: '📍', locating: '📡', located: '📍', failed: '⚠️' }[locationStatus.value]))
-const locationHint = computed(() => ({ idle: '等待定位', locating: '定位中...', located: '已定位', failed: '定位失败，使用默认城市' }[locationStatus.value]))
+const currentLat = ref(39.9042)
+const currentLon = ref(116.4074)
+const destination = ref('')
+const planning = ref(false)
+const routeInfo = ref(null)
 
-// ── 浏览器 GPS 定位 ──
-function getBrowserLocation() {
-  return new Promise((resolve) => {
-    if (!navigator.geolocation) {
-      locationStatus.value = 'failed'
-      resolve(null)
+// ── 实时定位 ──
+const locating = ref(false)
+const tracking = ref(false)
+const gpsStatus = ref('')
+const gpsStatusType = ref('ok')   // ok / warn / error
+let watchId = null
+
+function getMyLocationOnce() {
+  if (!('geolocation' in navigator)) {
+    gpsStatus.value = '❌ 浏览器不支持 GPS 定位'
+    gpsStatusType.value = 'error'
+    return
+  }
+  locating.value = true
+  gpsStatus.value = '正在获取 GPS...'
+  gpsStatusType.value = 'warn'
+  navigator.geolocation.getCurrentPosition(
+    async (pos) => {
+      const { latitude: lat, longitude: lon, accuracy } = pos.coords
+      gpsStatus.value = `定位成功（精度约 ${Math.round(accuracy)}m）`
+      gpsStatusType.value = 'ok'
+      await updateLocation(lat, lon, true)
+      locating.value = false
+    },
+    (err) => {
+      gpsStatus.value = `定位失败：${err.message || '用户拒绝或设备无 GPS'}`
+      gpsStatusType.value = 'error'
+      locating.value = false
+    },
+    { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+  )
+}
+
+function toggleTracking() {
+  if (tracking.value) {
+    if (watchId != null) {
+      navigator.geolocation.clearWatch(watchId)
+      watchId = null
+    }
+    tracking.value = false
+    gpsStatus.value = '⏸ 追踪已停止'
+    gpsStatusType.value = 'warn'
+  } else {
+    if (!('geolocation' in navigator)) {
+      gpsStatus.value = '❌ 浏览器不支持 GPS 定位'
+      gpsStatusType.value = 'error'
       return
     }
-    locationStatus.value = 'locating'
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        locationStatus.value = 'located'
-        resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude })
+    tracking.value = true
+    gpsStatus.value = '🛰️ 实时追踪中...'
+    gpsStatusType.value = 'ok'
+    watchId = navigator.geolocation.watchPosition(
+      async (pos) => {
+        const { latitude: lat, longitude: lon, accuracy } = pos.coords
+        // 只在位置变化 > 50m 时更新（避免抖动 + 节省 API 调用）
+        if (calcDistance(lat, lon, currentLat.value, currentLon.value) > 0.05) {
+          gpsStatus.value = `🛰️ 实时追踪中（精度 ${Math.round(accuracy)}m）`
+          await updateLocation(lat, lon, false)
+        }
       },
       (err) => {
-        console.log('[NavPanel] 定位失败:', err.message)
-        locationStatus.value = 'failed'
-        resolve(null)
+        gpsStatus.value = `追踪失败：${err.message || 'GPS 不可用'}`
+        gpsStatusType.value = 'error'
+        tracking.value = false
       },
-      { timeout: 8000, maximumAge: 300000 }
+      { enableHighAccuracy: true, timeout: 30000, maximumAge: 5000 }
     )
-  })
+  }
+}
+
+function calcDistance(lat1, lon1, lat2, lon2) {
+  // 简易 Haversine 距离（km）
+  const R = 6371
+  const toRad = (x) => x * Math.PI / 180
+  const dLat = toRad(lat2 - lat1)
+  const dLon = toRad(lon2 - lon1)
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2
+  return 2 * R * Math.asin(Math.sqrt(a))
 }
 
 function handleEnvMessage(msg) {
-  console.log('[NavPanel] 收到消息:', msg.type, msg.data ? '有数据' : '无数据')
   if (msg.type === 'environment' && msg.data) {
-    console.log('[NavPanel] 环境数据就绪:', msg.data.weather, msg.data.temperature)
     envData.value = msg.data
-  }
-  if (msg.type === 'driver_state' && msg.data) {
-    if (msg.data.risk_level) driverStatus.value = msg.data.risk_level
-  }
-  if ((msg.type === 'navigation' || msg.type === 'agent_navigation') && msg.data) {
-    console.log('[NavPanel] 导航数据:', msg.data.destination, '起点:', msg.data.origin)
-    mapError.value = false
-    navRoute.value = msg.data
+    // 同步地图当前位置
+    if (msg.data.lat != null && msg.data.lon != null) {
+      currentLat.value = msg.data.lat
+      currentLon.value = msg.data.lon
+      if (map) {
+        map.setView([msg.data.lat, msg.data.lon], map.getZoom())
+        if (marker) marker.setLatLng([msg.data.lat, msg.data.lon])
+      }
+    }
   }
 }
 
-function onMapError() {
-  console.log('[NavPanel] 静态地图加载失败')
-  mapError.value = true
+// ── 地图（Leaflet + 高德瓦片）──
+let map = null
+let marker = null
+let routeLine = null
+const mapEl = ref(null)
+
+function initMap() {
+  if (!window.L || !mapEl.value) return
+  map = window.L.map(mapEl.value, {
+    center: [currentLat.value, currentLon.value],
+    zoom: 12,
+    zoomControl: false,  // 隐藏默认的 +/- 按钮，自定义
+    attributionControl: false,
+  })
+  // 高德瓦片（不需要 Key，中文标注好）
+  window.L.tileLayer(
+    'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+    { subdomains: ['1', '2', '3', '4'], maxZoom: 18, minZoom: 4 }
+  ).addTo(map)
+  // 当前位置 marker
+  marker = window.L.marker([currentLat.value, currentLon.value], { draggable: true }).addTo(map)
+  // 拖拽 marker 也能更新位置
+  marker.on('dragend', async (e) => {
+    const { lat, lng } = e.target.getLatLng()
+    await updateLocation(lat, lng)
+  })
+  // 点击地图设置位置
+  map.on('click', async (e) => {
+    const { lat, lng } = e.latlng
+    marker.setLatLng([lat, lng])
+    await updateLocation(lat, lng)
+  })
 }
 
-// ── 驾驶员状态 ──
-const driverStatus = ref('normal')
-const driverStatusText = computed(() => {
-  const map = {
-    normal: '驾驶员状态正常',
-    attention_declining: '注意力下降，请保持专注',
-    distracted: '检测到分心，请注视前方',
-    dangerous: '危险！请立即注意道路',
+async function updateLocation(lat, lon, updateMap = true) {
+  currentLat.value = lat
+  currentLon.value = lon
+  if (updateMap && map) {
+    map.setView([lat, lon], map.getZoom())
+    if (marker) marker.setLatLng([lat, lon])
   }
-  return map[driverStatus.value] || '状态未知'
-})
-
-// ── HTTP 降级（WebSocket 不可用时的兜底）──
-async function fetchEnvFallback() {
   try {
-    // 先获取浏览器 GPS 定位
-    const gps = await getBrowserLocation()
-    let url = 'http://localhost:8000/api/environment'
-    if (gps) {
-      url += `?lat=${gps.lat}&lon=${gps.lon}`
-      // 主动上报 GPS 给后端，供导航工具使用
-      try {
-        await fetch(`http://localhost:8000/api/gps/update?lat=${gps.lat}&lon=${gps.lon}`, { method: 'POST' })
-      } catch {}
+    // 1. 写 location_store
+    await fetch('/api/location', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat, lon }),
+    })
+    // 2. 立即拉一次环境（不等 15s 周期）
+    const r = await fetch('/api/environment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat, lon }),
+    })
+    const d = await r.json()
+    if (d.data) {
+      envData.value = d.data
     }
-    console.log('[NavPanel] HTTP 请求环境数据:', url)
-    const res = await fetch(url)
-    console.log('[NavPanel] HTTP 响应:', res.status, res.ok)
-    if (res.ok) {
-      const json = await res.json()
-      console.log('[NavPanel] HTTP 数据:', json.status, json.data ? '有数据' : '无', '城市:', json.data?.city)
-      if (json.data) envData.value = json.data
-    }
-  } catch (e) { console.log('[NavPanel] HTTP 请求失败:', e.message) }
+  } catch (e) {
+    console.log('[NavPanel] updateLocation 失败:', e.message)
+  }
 }
 
-// ── WebSocket（增强版：心跳+重连）──
+async function planRoute() {
+  const dest = destination.value.trim()
+  if (!dest) return
+  planning.value = true
+  try {
+    const r = await fetch('/api/navigation/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destination: dest, lat: currentLat.value, lon: currentLon.value }),
+    })
+    const d = await r.json()
+    if (d.success && d.geometry && d.geometry.length > 0 && window.L) {
+      // 清除旧路径
+      if (routeLine) {
+        map.removeLayer(routeLine)
+        routeLine = null
+      }
+      // 画新路径
+      routeLine = window.L.polyline(d.geometry, { color: '#22c55e', weight: 5, opacity: 0.8 }).addTo(map)
+      // 终点 marker
+      const lastPt = d.geometry[d.geometry.length - 1]
+      window.L.marker(lastPt, { icon: window.L.divIcon({ className: 'dest-icon', html: '🏁', iconSize: [24, 24] }) }).addTo(map)
+      // 缩放到路径范围
+      map.fitBounds(routeLine.getBounds(), { padding: [20, 20] })
+      routeInfo.value = {
+        destination: d.destination,
+        distance: d.distance_km,
+        duration: d.duration_min,
+      }
+    } else {
+      // 降级：直线
+      routeInfo.value = {
+        destination: dest,
+        distance: d.distance_km || 0,
+        duration: d.duration_min || 0,
+      }
+      alert(d.route_summary || '路径规划失败：' + (d.route_summary || '未知错误'))
+    }
+  } catch (e) {
+    alert('导航请求失败：' + e.message)
+  } finally {
+    planning.value = false
+  }
+}
+
+// ── HTTP 拉取环境数据 ──
+async function fetchEnv() {
+  try {
+    // 用 GPS 坐标拉环境
+    const r = await fetch('/api/environment', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ lat: currentLat.value, lon: currentLon.value }),
+    })
+    if (r.ok) {
+      const d = await r.json()
+      if (d.data) {
+        envData.value = d.data
+        if (d.data.lat != null) currentLat.value = d.data.lat
+        if (d.data.lon != null) currentLon.value = d.data.lon
+      }
+    }
+  } catch (e) { /* ignore */ }
+}
+
+// ── WebSocket ──
 let ws = null
-let fallbackTimer = null
-let heartbeatTimer = null
 let reconnectTimeout = null
 let reconnectAttempts = 0
 const MAX_RECONNECT_DELAY = 30000
@@ -237,48 +386,17 @@ function connectWS() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
     const host = location.host || 'localhost:8000'
     ws = new WebSocket(`${protocol}//${host}/ws/navpanel`)
-
-    ws.onopen = () => {
-      reconnectAttempts = 0
-      startHeartbeat()
-    }
-
-    ws.onclose = () => {
-      stopHeartbeat()
-      scheduleReconnect()
-    }
-
-    ws.onerror = () => {
-      // 静默处理，onclose 会触发重连
-    }
-
+    ws.onopen = () => { reconnectAttempts = 0 }
+    ws.onclose = () => { scheduleReconnect() }
+    ws.onerror = () => { /* onclose will handle */ }
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data)
-        // 心跳响应
         if (msg.type === 'pong') return
         handleEnvMessage(msg)
-      } catch { /* 忽略 */ }
+      } catch { /* ignore */ }
     }
-  } catch {
-    // WebSocket 不可用，依赖 HTTP 降级
-  }
-}
-
-function startHeartbeat() {
-  stopHeartbeat()
-  heartbeatTimer = setInterval(() => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'ping' }))
-    }
-  }, 30000)
-}
-
-function stopHeartbeat() {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer)
-    heartbeatTimer = null
-  }
+  } catch { /* ignore */ }
 }
 
 function scheduleReconnect() {
@@ -305,9 +423,7 @@ const weatherEmoji = computed(() => {
   return emojiMap[envData.value?.weather] || '🌤️'
 })
 
-const weatherLabel = computed(() => {
-  return envData.value?.weather_desc || '--'
-})
+const weatherLabel = computed(() => envData.value?.weather_desc || '--')
 
 const contextClass = computed(() => {
   const ctx = envData.value?.driving_context || ''
@@ -332,21 +448,40 @@ const riskClass = computed(() => {
   return 'risk-low'
 })
 
+const statusText = computed(() => {
+  if (!envData.value) return '环境数据采集中...'
+  return 'GPS 天气实时联动中'
+})
+
 // ── 生命周期 ──
-onMounted(() => {
+onMounted(async () => {
   updateClock()
   timer = setInterval(updateClock, 1000)
+
+  // 初始化地图（等 DOM ready）
+  await nextTick()
+  initMap()
+
+  // 立即拉一次（不等 WS）
+  await fetchEnv()
+  // 每 30s 拉一次（兜底 + 跟随 GPS）
+  setInterval(fetchEnv, 30000)
+
   connectWS()
-  fetchEnvFallback()
-  fallbackTimer = setInterval(fetchEnvFallback, 30000)
 })
 
 onUnmounted(() => {
   clearInterval(timer)
-  clearInterval(fallbackTimer)
-  stopHeartbeat()
   if (reconnectTimeout) clearTimeout(reconnectTimeout)
+  if (watchId != null) {
+    navigator.geolocation.clearWatch(watchId)
+    watchId = null
+  }
   if (ws) ws.close()
+  if (map) {
+    map.remove()
+    map = null
+  }
 })
 </script>
 
@@ -360,7 +495,6 @@ onUnmounted(() => {
 }
 
 .env-content { display: flex; flex-direction: column; gap: 6px; }
-.env-section { margin-bottom: 2px; }
 
 /* ── 时间 ── */
 .time-section { text-align: center; }
@@ -370,14 +504,131 @@ onUnmounted(() => {
 }
 .env-date { font-size: 13px; color: #94a3b8; margin-top: 2px; }
 
-/* ── 天气卡片（参考 QML weatherCard）── */
+/* ── 地图 ── */
+.map-wrapper { display: flex; flex-direction: column; gap: 4px; }
+.map-container {
+  width: 100%;
+  height: 200px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #1e293b;
+  background: #1a2236;
+}
+.map-tip {
+  font-size: 10px;
+  color: #64748b;
+  text-align: center;
+}
+:deep(.dest-icon) {
+  font-size: 18px;
+  text-align: center;
+  line-height: 24px;
+}
+:deep(.leaflet-container) { background: #1a2236; }
+
+/* ── 位置信息 ── */
+.location-info { padding: 0 4px; }
+.location-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  padding: 3px 0;
+}
+.loc-icon { font-size: 14px; flex-shrink: 0; }
+.loc-text { color: #e2e8f0; font-weight: 500; flex: 1; }
+.loc-coord { color: #64748b; font-size: 11px; font-family: monospace; }
+
+/* ── 路径输入 ── */
+.route-input { display: flex; gap: 4px; }
+.route-field {
+  flex: 1;
+  background: #1a2236;
+  border: 1px solid #1e293b;
+  color: #cbd5e1;
+  padding: 5px 10px;
+  border-radius: 5px;
+  font-size: 12px;
+  outline: none;
+}
+.route-field:focus { border-color: #22c55e; }
+.route-btn {
+  background: #22c55e;
+  color: #000;
+  border: none;
+  padding: 5px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: bold;
+}
+.route-btn:hover { background: #4ade80; }
+.route-btn:disabled { background: #334155; color: #94a3b8; cursor: not-allowed; }
+
+/* ── GPS 实时定位控件 ── */
+.gps-controls {
+  display: flex;
+  gap: 4px;
+}
+.gps-btn {
+  flex: 1;
+  background: #1a2236;
+  color: #cbd5e1;
+  border: 1px solid #1e293b;
+  padding: 6px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+}
+.gps-btn:hover:not(:disabled) {
+  background: #22c55e;
+  color: #000;
+  border-color: #22c55e;
+}
+.gps-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.gps-btn-track {
+  background: #1e3a5f;
+  border-color: #3b82f6;
+  color: #93c5fd;
+}
+.gps-btn-stop {
+  background: #7f1d1d;
+  border-color: #ef4444;
+  color: #fca5a5;
+  animation: gps-pulse 1.5s infinite;
+}
+@keyframes gps-pulse {
+  50% { opacity: 0.7; }
+}
+.gps-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 4px;
+  padding: 4px 6px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+.gps-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.gps-dot.ok { background: #22c55e; box-shadow: 0 0 4px #22c55e; }
+.gps-dot.warn { background: #fbbf24; }
+.gps-dot.error { background: #ef4444; }
+
+/* ── 天气卡片 ── */
 .weather-card {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 14px; border-radius: 10px;
   transition: background 0.3s;
 }
 .weather-sun     { background: linear-gradient(135deg, #1a3a2a, #0f2b1a); border: 1px solid #166534; }
-.weather-cloud   { background: linear-gradient(135deg, #1e293b, #1a2332); border: 1px solid #334155; }
+.weather-cloud   { background: linear-gradient(135deg, #1e293b, #1e2332); border: 1px solid #334155; }
 .weather-rain    { background: linear-gradient(135deg, #1a2744, #162033); border: 1px solid #1e3a5f; }
 .weather-snow    { background: linear-gradient(135deg, #1e2a3a, #162233); border: 1px solid #2a3a4f; }
 .weather-fog     { background: linear-gradient(135deg, #2a2a2a, #1e1e1e); border: 1px solid #444; }
@@ -389,10 +640,6 @@ onUnmounted(() => {
 .weather-detail { text-align: right; }
 .weather-desc { display: block; font-size: 14px; color: #e2e8f0; }
 .weather-city { display: block; font-size: 11px; color: #64748b; margin-top: 2px; }
-.loc-dot { font-size: 12px; cursor: help; }
-.loc-locating { animation: loc-pulse 1.2s ease-in-out infinite; }
-@keyframes loc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
-.loc-failed { filter: grayscale(1); }
 
 /* ── 详细数据 ── */
 .env-details { padding: 0 4px; }
@@ -403,21 +650,15 @@ onUnmounted(() => {
 .env-label { color: #64748b; }
 .env-value { color: #e2e8f0; font-weight: 500; }
 
-/* ── 驾驶建议（参考 QML driverStateMessage）── */
+/* ── 驾驶建议 ── */
 .env-context {
   display: flex; align-items: center; gap: 8px;
   font-size: 13px; padding: 10px 12px; border-radius: 8px; line-height: 1.5;
 }
 .context-icon { flex-shrink: 0; font-size: 18px; }
-.context-warning {
-  background: #7f1d1d; border: 1px solid #ef4444; color: #fca5a5;
-}
-.context-caution {
-  background: #78350f; border: 1px solid #f59e0b; color: #fde68a;
-}
-.context-normal {
-  background: #14532d; border: 1px solid #22c55e; color: #86efac;
-}
+.context-warning { background: #7f1d1d; border: 1px solid #ef4444; color: #fca5a5; }
+.context-caution { background: #78350f; border: 1px solid #f59e0b; color: #fde68a; }
+.context-normal  { background: #14532d; border: 1px solid #22c55e; color: #86efac; }
 
 /* ── 预警动画 ── */
 .alerts-section { margin-top: 4px; }
@@ -430,47 +671,30 @@ onUnmounted(() => {
 .alert-icon { flex-shrink: 0; font-size: 14px; }
 .alert-text { line-height: 1.4; }
 
-/* Alert TransitionGroup */
 .alert-enter-active { transition: all 0.4s ease-out; }
 .alert-leave-active { transition: all 0.3s ease-in; }
 .alert-enter-from { opacity: 0; transform: translateX(-20px); }
 .alert-leave-to   { opacity: 0; transform: translateX(20px); }
 
-/* ── 驾驶员状态（新增，参考 QML driverCard）── */
-.driver-status {
-  display: flex; align-items: center; gap: 10px;
-  padding: 10px 12px; border-radius: 8px; font-size: 13px;
+/* ── 状态指示 ── */
+.status-row {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: #64748b;
 }
-.status-normal {
-  background: #14532d; border: 1px solid #22c55e; color: #86efac;
+.status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #22c55e;
 }
-.status-attention_declining {
-  background: #78350f; border: 1px solid #f59e0b; color: #fde68a;
-}
-.status-distracted {
-  background: #7f1d1d; border: 1px solid #ef4444; color: #fca5a5;
-  animation: pulse-warning 1.5s infinite;
-}
-.status-dangerous {
-  background: #991b1b; border: 2px solid #ff0000; color: #fff;
-  animation: pulse-danger 0.8s infinite;
-}
-.driver-icon { font-size: 20px; flex-shrink: 0; }
-.driver-text { line-height: 1.4; }
-
-@keyframes pulse-warning {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
-}
-@keyframes pulse-danger {
-  0%, 100% { opacity: 1; border-color: #ff0000; }
-  50% { opacity: 0.5; border-color: #ff6666; }
-}
+.status-dot.warn { background: #f59e0b; }
+.status-text { font-family: monospace; }
 
 /* ── 风险指数 ── */
 .risk-high   { color: #fca5a5 !important; font-weight: bold; }
 .risk-medium { color: #fde68a !important; }
 .risk-low    { color: #86efac !important; }
+
+/* ── 分割线 ── */
+.env-divider { height: 1px; background: #1e293b; margin: 6px 0; }
 
 /* ── 加载状态 ── */
 .placeholder {
@@ -479,79 +703,4 @@ onUnmounted(() => {
 }
 .loading-icon { font-size: 28px; animation: spin 2s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-
-/* ── 分割线 ── */
-.env-divider { height: 1px; background: #1e293b; margin: 6px 0; }
-
-/* ── 导航路线卡片 ── */
-.nav-route-card {
-  margin-top: 6px; padding: 12px; border-radius: 10px;
-  background: linear-gradient(135deg, #1e3a5f, #162233);
-  border: 1px solid #2563eb;
-}
-.nav-header {
-  display: flex; align-items: center; gap: 6px;
-  margin-bottom: 8px;
-}
-.nav-icon { font-size: 18px; }
-.nav-title { font-size: 13px; font-weight: 600; color: #93c5fd; flex: 1; }
-.nav-close {
-  background: none; border: none; color: #64748b; cursor: pointer;
-  font-size: 14px; padding: 0 4px;
-}
-.nav-close:hover { color: #ef4444; }
-.nav-dest {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 12px; color: #e2e8f0; margin-bottom: 8px; flex-wrap: wrap;
-}
-.nav-from { color: #94a3b8; }
-.nav-arrow { color: #2563eb; font-size: 14px; }
-.nav-to { color: #f1f5f9; font-weight: 600; }
-.nav-stats {
-  display: flex; gap: 12px; margin-bottom: 6px;
-}
-.nav-stat {
-  font-size: 14px; font-weight: 600; color: #93c5fd;
-  background: rgba(37,99,235,0.15); padding: 4px 10px; border-radius: 6px;
-}
-.nav-roads {
-  font-size: 11px; color: #64748b; line-height: 1.5;
-  padding: 6px 8px; background: rgba(0,0,0,0.2); border-radius: 6px;
-}
-
-/* 静态地图 */
-.nav-map-container {
-  margin-top: 8px; border-radius: 8px; overflow: hidden;
-  border: 1px solid #1e3a5f; position: relative;
-}
-.nav-map-img {
-  width: 100%; display: block; border-radius: 8px;
-}
-.nav-map-legend {
-  position: absolute; bottom: 4px; right: 4px;
-  display: flex; gap: 8px;
-  background: rgba(0,0,0,0.6); padding: 3px 8px; border-radius: 4px;
-}
-.legend-item { font-size: 10px; color: #cbd5e1; display: flex; align-items: center; gap: 3px; }
-.legend-dot { width: 8px; height: 8px; border-radius: 50%; }
-.legend-start { background: #22c55e; }
-.legend-end { background: #ef4444; }
-
-/* 高德地图链接 */
-.nav-open-amap {
-  display: block; text-align: center; margin-top: 8px;
-  padding: 6px 12px; border-radius: 6px;
-  background: rgba(37,99,235,0.2); border: 1px solid rgba(37,99,235,0.4);
-  color: #93c5fd; font-size: 12px; text-decoration: none;
-  transition: all 0.2s;
-}
-.nav-open-amap:hover {
-  background: rgba(37,99,235,0.35); color: #bfdbfe;
-}
-
-/* 导航卡片动画 */
-.nav-slide-enter-active { transition: all 0.4s ease-out; }
-.nav-slide-leave-active { transition: all 0.3s ease-in; }
-.nav-slide-enter-from { opacity: 0; transform: translateY(-10px); }
-.nav-slide-leave-to { opacity: 0; transform: translateX(20px); }
 </style>

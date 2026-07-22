@@ -27,3 +27,4 @@ trip-planner/
 
 .codebanana/
 .coding-agent/
+data/knowledge/faiss_index/

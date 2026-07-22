@@ -1,21 +1,16 @@
 """
-MediaPipe 面部追踪器 — 替代 dlib
+面部追踪器 — 3 级降级策略
 
-使用 MediaPipe Face Landmarker Tasks API（兼容 0.10.30+）。
+Level 1: MediaPipe Face Landmarker（468 点 + 虹膜 + blendshapes）
+Level 2: OpenCV Haar Cascade（人脸框 + 粗略视线估算）
+Level 3: noop（无检测，返回默认值，系统不崩溃）
 """
+import logging
 import cv2
-import mediapipe as mp
 import numpy as np
 import os
 
-# MediaPipe 0.10.30+ 使用 tasks API
-from mediapipe.tasks import python as mp_tasks
-from mediapipe.tasks.python import vision
-
-_BaseOptions = mp_tasks.BaseOptions
-_FaceLandmarker = vision.FaceLandmarker
-_FaceLandmarkerOptions = vision.FaceLandmarkerOptions
-_RunningMode = vision.RunningMode
+logger = logging.getLogger(__name__)
 
 # 模型路径
 _MODEL_PATH = os.path.join(
@@ -25,57 +20,156 @@ _MODEL_PATH = os.path.join(
 
 
 class FaceTracker:
-    """MediaPipe 面部追踪 — 眼动 + 头部姿态"""
+    """面部追踪 — 3 级降级：MediaPipe → OpenCV Haar → noop"""
 
     def __init__(self):
-        if not os.path.exists(_MODEL_PATH):
-            raise FileNotFoundError(
-                f"面部模型文件不存在: {_MODEL_PATH}\n"
-                "下载: wget https://storage.googleapis.com/mediapipe-models/"
-                "face_landmarker/face_landmarker/float16/latest/"
-                "face_landmarker.task"
-            )
-
-        options = _FaceLandmarkerOptions(
-            base_options=_BaseOptions(model_asset_path=_MODEL_PATH),
-            running_mode=_RunningMode.VIDEO,
-            num_faces=1,
-            output_face_blendshapes=True,
-        )
-        self.landmarker = _FaceLandmarker.create_from_options(options)
+        self._mode = "noop"
         self.face_landmarks = None
         self._img_h = 0
         self._img_w = 0
         self._timestamp = 0
 
+        # ── Level 1: MediaPipe ──
+        try:
+            import mediapipe as mp
+            from mediapipe.tasks import python as mp_tasks
+            from mediapipe.tasks.python import vision
+
+            if not os.path.exists(_MODEL_PATH):
+                raise FileNotFoundError(f"模型文件不存在: {_MODEL_PATH}")
+
+            options = vision.FaceLandmarkerOptions(
+                base_options=mp_tasks.BaseOptions(model_asset_path=_MODEL_PATH),
+                running_mode=vision.RunningMode.VIDEO,
+                num_faces=1,
+                output_face_blendshapes=True,
+            )
+            self._mp = mp
+            self._landmarker = vision.FaceLandmarker.create_from_options(options)
+            self._mode = "mediapipe"
+            logger.info("FaceTracker: MediaPipe 模式（468 点 + 虹膜）")
+            return
+        except Exception as e:
+            logger.warning(f"FaceTracker: MediaPipe 不可用: {e}")
+
+        # ── Level 2: OpenCV Haar Cascade ──
+        try:
+            haar_path = os.path.join(
+                cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
+            self._haar = cv2.CascadeClassifier(haar_path)
+            if self._haar.empty():
+                raise RuntimeError("Haar Cascade 加载失败")
+            self._mode = "opencv"
+            self._haar_gaze_history = []
+            logger.info("FaceTracker: OpenCV Haar 模式（人脸框 + 粗略视线）")
+            return
+        except Exception as e:
+            logger.warning(f"FaceTracker: OpenCV Haar 不可用: {e}")
+
+        # ── Level 3: noop ──
+        self._mode = "noop"
+        logger.warning("FaceTracker: noop 模式（无面部检测，系统降级运行）")
+
+    @property
+    def mode(self) -> str:
+        """当前运行模式: mediapipe / opencv / noop"""
+        return self._mode
+
     def refresh(self, frame, rgb=None):
-        """处理一帧，更新面部关键点。可传入预转换的 rgb 以节省一次 cvtColor。"""
+        """处理一帧，更新面部状态。"""
         self._img_h, self._img_w = frame.shape[:2]
         self._timestamp += 1
+
+        if self._mode == "mediapipe":
+            self._refresh_mediapipe(frame, rgb)
+        elif self._mode == "opencv":
+            self._refresh_opencv(frame)
+        else:
+            self.face_landmarks = None
+
+    def _refresh_mediapipe(self, frame, rgb=None):
+        """Level 1: MediaPipe 468 点检测"""
         if rgb is None:
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = self.landmarker.detect_for_video(mp_image, self._timestamp)
+        mp_image = self._mp.Image(image_format=self._mp.ImageFormat.SRGB, data=rgb)
+        result = self._landmarker.detect_for_video(mp_image, self._timestamp)
         if result.face_landmarks:
             self.face_landmarks = result.face_landmarks[0]
         else:
             self.face_landmarks = None
+
+    def _refresh_opencv(self, frame):
+        """Level 2: OpenCV Haar Cascade — 人脸框 + 粗略视线估算"""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        faces = self._haar.detectMultiScale(gray, scaleFactor=1.3, minNeighbors=5, minSize=(60, 60))
+
+        if len(faces) > 0:
+            # 取最大的人脸
+            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+            cx = x + w / 2
+            frame_cx = self._img_w / 2
+
+            # 粗略估算：人脸中心偏左→视线左，偏右→视线右
+            offset = (cx - frame_cx) / max(frame_cx, 1)
+
+            # 人脸框宽高比估算 pitch（低头时脸框变短）
+            aspect = h / max(w, 1)
+            pitch_est = (aspect - 1.2) * 30  # 粗略映射
+
+            if offset < -0.15:
+                h_raw = "left"
+            elif offset > 0.15:
+                h_raw = "right"
+            else:
+                h_raw = "center"
+
+            if pitch_est > 8:
+                v_raw = "down"
+            elif pitch_est < -8:
+                v_raw = "up"
+            else:
+                v_raw = "center"
+
+            # 组合
+            if h_raw == "center" and v_raw == "center":
+                raw = "center"
+            elif h_raw == "center":
+                raw = v_raw
+            elif v_raw == "center":
+                raw = h_raw
+            else:
+                raw = f"{v_raw}_{h_raw}"
+
+            # 平滑
+            self._haar_gaze_history.append(raw)
+            if len(self._haar_gaze_history) > 5:
+                self._haar_gaze_history.pop(0)
+            recent = self._haar_gaze_history[-3:]
+            best = max(set(recent), key=recent.count) if recent else raw
+            self._haar_gaze = best
+
+            # 标记为检测到（用非 None 占位）
+            self.face_landmarks = []
+            self._haar_pitch = round(pitch_est, 1)
+            self._haar_yaw = round(offset * 45, 1)  # 粗略映射到角度
+        else:
+            self.face_landmarks = None
+            self._haar_gaze = "center"
 
     def is_face_detected(self) -> bool:
         return self.face_landmarks is not None
 
     @property
     def pupils_located(self) -> bool:
-        return self.face_landmarks is not None
+        return self._mode == "mediapipe" and self.face_landmarks is not None
 
-    # ── 眼动 ──
+    # ── 眼动（仅 MediaPipe 模式有效）──
 
     def horizontal_ratio(self) -> float:
         """视线水平比例 -1(左) ~ 0(中) ~ 1(右)"""
-        if not self.face_landmarks:
+        if not self.face_landmarks or self._mode != "mediapipe":
             return 0.0
         lm = self.face_landmarks
-        # 左眼角 33, 右眼角 133, 左虹膜 468
         left_corner = lm[33].x
         right_corner = lm[133].x
         iris = lm[468].x
@@ -86,11 +180,9 @@ class FaceTracker:
 
     def vertical_ratio(self) -> float:
         """视线垂直比例 -1(上) ~ 0(中) ~ 1(下)"""
-        if not self.face_landmarks:
+        if not self.face_landmarks or self._mode != "mediapipe":
             return 0.0
         lm = self.face_landmarks
-        # 左眼上眼睑 159, 下眼睑 145, 虹膜 468
-        # 右眼上眼睑 386, 下眼睑 374, 虹膜 473
         left_top = lm[159].y
         left_bottom = lm[145].y
         left_iris = lm[468].y
@@ -102,9 +194,8 @@ class FaceTracker:
         right_eye_h = right_bottom - right_top
         left_ratio = (left_iris - left_top) / left_eye_h if left_eye_h > 0.001 else 0.5
         right_ratio = (right_iris - right_top) / right_eye_h if right_eye_h > 0.001 else 0.5
-        # 双眼平均，0.5=居中，<0.5=偏上，>0.5=偏下
         avg = (left_ratio + right_ratio) / 2.0
-        return avg - 0.5  # 映射到 -1(上) ~ 0(中) ~ 1(下)
+        return avg - 0.5
 
     def is_center(self) -> bool:
         return abs(self.horizontal_ratio()) < 0.08 and abs(self.vertical_ratio()) < 0.1
@@ -121,19 +212,20 @@ class FaceTracker:
     def is_down(self) -> bool:
         return self.vertical_ratio() > 0.1
 
-    # 眨眼追踪 — 自适应基线
+    # ── 眨眼追踪（仅 MediaPipe 模式有效）──
+
     _blink_count = 0
     _blink_closed = False
     _ear_history = []
-    _ear_baseline = None           # 用户睁眼时的 EAR 基线
+    _ear_baseline = None
     _baseline_samples = []
 
-    BLINK_RATIO = 0.55             # 低于基线 55% = 闭眼
-    CALIBRATION_FRAMES = 60        # 前 60 帧搜集基线
+    BLINK_RATIO = 0.55
+    CALIBRATION_FRAMES = 60
 
     def is_blinking(self) -> bool:
         """自适应眨眼检测 — 基于个人 EAR 基线"""
-        if not self.face_landmarks:
+        if self._mode != "mediapipe" or not self.face_landmarks:
             return self._blink_closed
 
         lm = self.face_landmarks
@@ -145,16 +237,13 @@ class FaceTracker:
         if len(self._ear_history) > 5:
             self._ear_history.pop(0)
 
-        # 前 60 帧搜集睁眼基线（取中位数，排除闭眼异常值）
         if self._ear_baseline is None:
             self._baseline_samples.append(ear)
             if len(self._baseline_samples) >= self.CALIBRATION_FRAMES:
-                # 取中位数（抗异常值干扰）
                 sorted_vals = sorted(self._baseline_samples)
                 self._ear_baseline = sorted_vals[len(sorted_vals) // 2]
-            return False  # 校准中，不判断
+            return False
 
-        # 低于基线 40% = 闭眼
         threshold = self._ear_baseline * self.BLINK_RATIO
         closed = ear < threshold
 
@@ -189,28 +278,37 @@ class FaceTracker:
     # ── 头部姿态 ──
 
     def head_pose(self) -> dict:
-        """返回头部姿态角度"""
+        """返回头部姿态角度 {pitch, yaw, roll}"""
+        if self._mode == "mediapipe":
+            return self._head_pose_mediapipe()
+        elif self._mode == "opencv":
+            return {"pitch": getattr(self, "_haar_pitch", 0),
+                    "yaw": getattr(self, "_haar_yaw", 0), "roll": 0}
+        else:
+            return {"pitch": 0, "yaw": 0, "roll": 0}
+
+    def _head_pose_mediapipe(self) -> dict:
+        """MediaPipe PnP 头部姿态"""
         if not self.face_landmarks:
             return {"pitch": 0, "yaw": 0, "roll": 0}
 
         lm = self.face_landmarks
-        # 6 点：鼻尖、下巴、左右眼角、左右嘴角
         img_points = np.array([
-            [lm[1].x * self._img_w, lm[1].y * self._img_h],      # 鼻尖
-            [lm[152].x * self._img_w, lm[152].y * self._img_h],   # 下巴
-            [lm[33].x * self._img_w, lm[33].y * self._img_h],     # 左眼角
-            [lm[263].x * self._img_w, lm[263].y * self._img_h],   # 右眼角
-            [lm[61].x * self._img_w, lm[61].y * self._img_h],     # 左嘴角
-            [lm[291].x * self._img_w, lm[291].y * self._img_h],   # 右嘴角
+            [lm[1].x * self._img_w, lm[1].y * self._img_h],
+            [lm[152].x * self._img_w, lm[152].y * self._img_h],
+            [lm[33].x * self._img_w, lm[33].y * self._img_h],
+            [lm[263].x * self._img_w, lm[263].y * self._img_h],
+            [lm[61].x * self._img_w, lm[61].y * self._img_h],
+            [lm[291].x * self._img_w, lm[291].y * self._img_h],
         ], dtype=np.float32)
 
         model_points = np.array([
-            [0.0, 0.0, 0.0],           # 鼻尖
-            [0.0, -63.6, -12.5],       # 下巴
-            [-43.3, 32.7, -26.0],      # 左眼角
-            [43.3, 32.7, -26.0],       # 右眼角
-            [-30.0, -20.0, -20.0],     # 左嘴角
-            [30.0, -20.0, -20.0],      # 右嘴角
+            [0.0, 0.0, 0.0],
+            [0.0, -63.6, -12.5],
+            [-43.3, 32.7, -26.0],
+            [43.3, 32.7, -26.0],
+            [-30.0, -20.0, -20.0],
+            [30.0, -20.0, -20.0],
         ], dtype=np.float32)
 
         focal = self._img_w
@@ -235,19 +333,29 @@ class FaceTracker:
 
         return {"pitch": round(pitch, 1), "yaw": round(yaw, 1), "roll": round(roll, 1)}
 
-    _gaze_history = []  # 平滑防抖
+    # ── 视线状态 ──
+
+    _gaze_history = []
 
     @property
     def gaze_state(self) -> str:
+        if self._mode == "mediapipe":
+            return self._gaze_state_mediapipe()
+        elif self._mode == "opencv":
+            return getattr(self, "_haar_gaze", "center")
+        else:
+            return "center"
+
+    def _gaze_state_mediapipe(self) -> str:
+        """MediaPipe: 头部姿态 + 虹膜位置 → 9 种视线状态"""
         if not self.face_landmarks:
             return "center"
 
-        # 头部姿态
-        head = self.head_pose()
+        head = self._head_pose_mediapipe()
         yaw = head.get("yaw", 0)
         pitch = head.get("pitch", 0)
 
-        # ── 水平方向: 头部 yaw 优先，虹膜位置辅助 ──
+        # 水平: yaw 优先，虹膜辅助
         if yaw > 10:
             h_raw = "right"
         elif yaw < -10:
@@ -261,35 +369,34 @@ class FaceTracker:
             else:
                 h_raw = "center"
 
-        # ── 垂直方向: 头部 pitch 优先，虹膜垂直位置辅助 ──
-        if pitch < -8:           # 抬头
+        # 垂直: pitch 优先，虹膜辅助
+        if pitch < -8:
             v_raw = "up"
-        elif pitch > 8:         # 低头
+        elif pitch > 8:
             v_raw = "down"
         else:
             vr = self.vertical_ratio()
-            if vr < -0.12:       # 虹膜偏上
+            if vr < -0.12:
                 v_raw = "up"
-            elif vr > 0.12:      # 虹膜偏下
+            elif vr > 0.12:
                 v_raw = "down"
             else:
                 v_raw = "center"
 
-        # ── 组合：水平 + 垂直 → 9 种状态 ──
+        # 组合
         if h_raw == "center" and v_raw == "center":
             raw = "center"
         elif h_raw == "center":
-            raw = v_raw           # up / down
+            raw = v_raw
         elif v_raw == "center":
-            raw = h_raw           # left / right
+            raw = h_raw
         else:
-            raw = f"{v_raw}_{h_raw}"  # up_left, up_right, down_left, down_right
+            raw = f"{v_raw}_{h_raw}"
 
-        # 平滑：最近 5 帧中占多数的状态
+        # 平滑
         self._gaze_history.append(raw)
         if len(self._gaze_history) > 8:
             self._gaze_history.pop(0)
-        # 取最近 5 帧中频率最高的状态
         recent = self._gaze_history[-5:]
         best = max(set(recent), key=recent.count)
         if recent.count(best) >= 3:

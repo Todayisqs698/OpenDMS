@@ -6,10 +6,11 @@
     "build": "vite build"
   },
   "dependencies": {
-    "vue": "^3.4.0",
-    "vue-router": "^4.3.0",
+    "echarts": "^5.5.0",
     "element-plus": "^2.7.0",
-    "echarts": "^5.5.0"
+    "leaflet": "^1.9.4",
+    "vue": "^3.4.0",
+    "vue-router": "^4.3.0"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
