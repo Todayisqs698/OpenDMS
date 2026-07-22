@@ -20,3 +20,8 @@ data/logs/
 # IDE
 .vscode/
 .idea/
+backend/data/
+tools/netease-cloud-music-api/
+trip-planner/
+.trae-html-share-packages/
+

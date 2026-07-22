@@ -22,7 +22,7 @@
     <div class="metrics" v-if="data">
       <div class="metric">
         <span class="metric-label">视线</span>
-        <span class="metric-value">{{ data.gaze || '--' }}</span>
+        <span class="metric-value">{{ gazeLabel }}</span>
       </div>
       <div class="metric">
         <span class="metric-label">手势</span>
@@ -53,10 +53,19 @@
 </template>
 
 <script setup>
-import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, watch, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import * as echarts from 'echarts'
 
 const props = defineProps({ data: Object })
+
+const gazeLabelMap = {
+  center: '前方', left: '左', right: '右', up: '上', down: '下',
+  up_left: '左上', up_right: '右上', down_left: '左下', down_right: '右下', lost: '丢失'
+}
+const gazeLabel = computed(() => {
+  const g = props.data?.gaze
+  return g ? (gazeLabelMap[g] || g) : '--'
+})
 
 const gaugeChart = ref(null)
 let chartInstance = null

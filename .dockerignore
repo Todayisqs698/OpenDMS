@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+.venv/
+
+# Environment
+.env
+*.db
+
+# MediaPipe 模型文件（太大，不入镜像）
+modules/vision/*.task
+modules/vision/*.dat
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# Data（通过 volume 挂载）
+data/knowledge/faiss_index/
+
+# IDE
+.claude/
+.coding-agent/
+.codebanana/
+.git/
+_archive/
+edgeguard-progress/
+
+# OS
+.DS_Store
+Thumbs.db

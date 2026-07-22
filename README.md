@@ -145,6 +145,3 @@ python app.py --dry-run    # 干跑模式（测试AI链路）
 | 🔲 `AlertPanel.vue` | 三级告警动画+语音联动 |
 | 🔲 Whisper集成 | speech_recognizer.py已完整，未接入app.py实时流程 |
 
-## 参考声明
-
-本项目感知层的底层视觉/语音管线参考了 [In-Vehicle-Multimodal-Interaction-System](https://github.com/1Reminding/In-Vehicle-Multimodal-Interaction-System) 的架构设计。边缘计算决策层、LangGraph Agent 编排层、RAG 知识库、Vue3 前端为自主开发。

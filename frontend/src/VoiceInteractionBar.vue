@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="voice-interaction-bar" :class="{ offline: !online }">
     <!-- 离线提示 -->
     <div v-if="!online" class="offline-banner">
@@ -232,7 +232,7 @@ async function sendToBackend(text: string) {
   errorMsg.value = ''
 
   try {
-    const resp = await fetch('http://localhost:8000/api/interaction/query', {
+    const resp = await fetch('/api/interaction/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

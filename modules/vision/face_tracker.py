@@ -48,11 +48,12 @@ class FaceTracker:
         self._img_w = 0
         self._timestamp = 0
 
-    def refresh(self, frame):
-        """处理一帧，更新面部关键点"""
+    def refresh(self, frame, rgb=None):
+        """处理一帧，更新面部关键点。可传入预转换的 rgb 以节省一次 cvtColor。"""
         self._img_h, self._img_w = frame.shape[:2]
         self._timestamp += 1
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if rgb is None:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         result = self.landmarker.detect_for_video(mp_image, self._timestamp)
         if result.face_landmarks:
@@ -83,14 +84,42 @@ class FaceTracker:
             return 0.0
         return (iris - left_corner) / eye_width - 0.5
 
+    def vertical_ratio(self) -> float:
+        """视线垂直比例 -1(上) ~ 0(中) ~ 1(下)"""
+        if not self.face_landmarks:
+            return 0.0
+        lm = self.face_landmarks
+        # 左眼上眼睑 159, 下眼睑 145, 虹膜 468
+        # 右眼上眼睑 386, 下眼睑 374, 虹膜 473
+        left_top = lm[159].y
+        left_bottom = lm[145].y
+        left_iris = lm[468].y
+        right_top = lm[386].y
+        right_bottom = lm[374].y
+        right_iris = lm[473].y
+
+        left_eye_h = left_bottom - left_top
+        right_eye_h = right_bottom - right_top
+        left_ratio = (left_iris - left_top) / left_eye_h if left_eye_h > 0.001 else 0.5
+        right_ratio = (right_iris - right_top) / right_eye_h if right_eye_h > 0.001 else 0.5
+        # 双眼平均，0.5=居中，<0.5=偏上，>0.5=偏下
+        avg = (left_ratio + right_ratio) / 2.0
+        return avg - 0.5  # 映射到 -1(上) ~ 0(中) ~ 1(下)
+
     def is_center(self) -> bool:
-        return abs(self.horizontal_ratio()) < 0.08
+        return abs(self.horizontal_ratio()) < 0.08 and abs(self.vertical_ratio()) < 0.1
 
     def is_right(self) -> bool:
         return self.horizontal_ratio() > 0.08
 
     def is_left(self) -> bool:
         return self.horizontal_ratio() < -0.08
+
+    def is_up(self) -> bool:
+        return self.vertical_ratio() < -0.1
+
+    def is_down(self) -> bool:
+        return self.vertical_ratio() > 0.1
 
     # 眨眼追踪 — 自适应基线
     _blink_count = 0
@@ -213,23 +242,48 @@ class FaceTracker:
         if not self.face_landmarks:
             return "center"
 
-        # 头部 yaw 角
+        # 头部姿态
         head = self.head_pose()
         yaw = head.get("yaw", 0)
+        pitch = head.get("pitch", 0)
 
+        # ── 水平方向: 头部 yaw 优先，虹膜位置辅助 ──
         if yaw > 10:
-            raw = "right"
+            h_raw = "right"
         elif yaw < -10:
-            raw = "left"
+            h_raw = "left"
         else:
-            # 虹膜位置
             ratio = self.horizontal_ratio()
             if ratio > 0.13:
-                raw = "right"
+                h_raw = "right"
             elif ratio < -0.13:
-                raw = "left"
+                h_raw = "left"
             else:
-                raw = "center"
+                h_raw = "center"
+
+        # ── 垂直方向: 头部 pitch 优先，虹膜垂直位置辅助 ──
+        if pitch < -8:           # 抬头
+            v_raw = "up"
+        elif pitch > 8:         # 低头
+            v_raw = "down"
+        else:
+            vr = self.vertical_ratio()
+            if vr < -0.12:       # 虹膜偏上
+                v_raw = "up"
+            elif vr > 0.12:      # 虹膜偏下
+                v_raw = "down"
+            else:
+                v_raw = "center"
+
+        # ── 组合：水平 + 垂直 → 9 种状态 ──
+        if h_raw == "center" and v_raw == "center":
+            raw = "center"
+        elif h_raw == "center":
+            raw = v_raw           # up / down
+        elif v_raw == "center":
+            raw = h_raw           # left / right
+        else:
+            raw = f"{v_raw}_{h_raw}"  # up_left, up_right, down_left, down_right
 
         # 平滑：最近 5 帧中占多数的状态
         self._gaze_history.append(raw)

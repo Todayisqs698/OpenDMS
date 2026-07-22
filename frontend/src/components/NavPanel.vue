@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <section class="panel nav-panel">
     <h2 class="panel-title">导航 & 环境</h2>
 
@@ -81,6 +81,38 @@
         </span>
         <span class="driver-text">{{ driverStatusText }}</span>
       </div>
+
+      <!-- 导航路线卡片 -->
+      <Transition name="nav-slide">
+        <div v-if="navRoute" class="nav-route-card">
+          <div class="nav-header">
+            <span class="nav-icon">🧭</span>
+            <span class="nav-title">导航路线</span>
+            <button class="nav-close" @click="navRoute = null">✕</button>
+          </div>
+          <div class="nav-dest">
+            <span class="nav-from">📍 {{ navRoute.origin || '当前位置' }}</span>
+            <span class="nav-arrow">→</span>
+            <span class="nav-to">🎯 {{ navRoute.destination }}</span>
+          </div>
+          <div class="nav-stats">
+            <span class="nav-stat">📏 {{ navRoute.distance_km }} km</span>
+            <span class="nav-stat">⏱️ {{ navRoute.duration_min }} 分钟</span>
+          </div>
+          <div class="nav-roads" v-if="navRoute.route_summary">{{ navRoute.route_summary }}</div>
+          <!-- 静态地图 -->
+          <div class="nav-map-container" v-if="navRoute.map_url && !mapError">
+            <img :src="navRoute.map_url" alt="路线地图" class="nav-map-img" @error="onMapError" />
+            <div class="nav-map-legend">
+              <span class="legend-item"><span class="legend-dot legend-start"></span>起点</span>
+              <span class="legend-item"><span class="legend-dot legend-end"></span>终点</span>
+            </div>
+          </div>
+          <a v-if="navRoute.amap_nav_url" :href="navRoute.amap_nav_url" target="_blank" class="nav-open-amap">
+            🗺️ 在高德地图中打开
+          </a>
+        </div>
+      </Transition>
     </div>
   </section>
 </template>
@@ -105,6 +137,8 @@ function updateClock() {
 
 // ── 环境数据 ──
 const envData = ref(null)
+const navRoute = ref(null)  // 导航路线数据
+const mapError = ref(false)  // 静态地图加载失败
 const locationStatus = ref('idle')  // idle | locating | located | failed
 const locIcon = computed(() => ({ idle: '📍', locating: '📡', located: '📍', failed: '⚠️' }[locationStatus.value]))
 const locationHint = computed(() => ({ idle: '等待定位', locating: '定位中...', located: '已定位', failed: '定位失败，使用默认城市' }[locationStatus.value]))
@@ -142,6 +176,16 @@ function handleEnvMessage(msg) {
   if (msg.type === 'driver_state' && msg.data) {
     if (msg.data.risk_level) driverStatus.value = msg.data.risk_level
   }
+  if ((msg.type === 'navigation' || msg.type === 'agent_navigation') && msg.data) {
+    console.log('[NavPanel] 导航数据:', msg.data.destination, '起点:', msg.data.origin)
+    mapError.value = false
+    navRoute.value = msg.data
+  }
+}
+
+function onMapError() {
+  console.log('[NavPanel] 静态地图加载失败')
+  mapError.value = true
 }
 
 // ── 驾驶员状态 ──
@@ -164,6 +208,10 @@ async function fetchEnvFallback() {
     let url = 'http://localhost:8000/api/environment'
     if (gps) {
       url += `?lat=${gps.lat}&lon=${gps.lon}`
+      // 主动上报 GPS 给后端，供导航工具使用
+      try {
+        await fetch(`http://localhost:8000/api/gps/update?lat=${gps.lat}&lon=${gps.lon}`, { method: 'POST' })
+      } catch {}
     }
     console.log('[NavPanel] HTTP 请求环境数据:', url)
     const res = await fetch(url)
@@ -434,4 +482,76 @@ onUnmounted(() => {
 
 /* ── 分割线 ── */
 .env-divider { height: 1px; background: #1e293b; margin: 6px 0; }
+
+/* ── 导航路线卡片 ── */
+.nav-route-card {
+  margin-top: 6px; padding: 12px; border-radius: 10px;
+  background: linear-gradient(135deg, #1e3a5f, #162233);
+  border: 1px solid #2563eb;
+}
+.nav-header {
+  display: flex; align-items: center; gap: 6px;
+  margin-bottom: 8px;
+}
+.nav-icon { font-size: 18px; }
+.nav-title { font-size: 13px; font-weight: 600; color: #93c5fd; flex: 1; }
+.nav-close {
+  background: none; border: none; color: #64748b; cursor: pointer;
+  font-size: 14px; padding: 0 4px;
+}
+.nav-close:hover { color: #ef4444; }
+.nav-dest {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: #e2e8f0; margin-bottom: 8px; flex-wrap: wrap;
+}
+.nav-from { color: #94a3b8; }
+.nav-arrow { color: #2563eb; font-size: 14px; }
+.nav-to { color: #f1f5f9; font-weight: 600; }
+.nav-stats {
+  display: flex; gap: 12px; margin-bottom: 6px;
+}
+.nav-stat {
+  font-size: 14px; font-weight: 600; color: #93c5fd;
+  background: rgba(37,99,235,0.15); padding: 4px 10px; border-radius: 6px;
+}
+.nav-roads {
+  font-size: 11px; color: #64748b; line-height: 1.5;
+  padding: 6px 8px; background: rgba(0,0,0,0.2); border-radius: 6px;
+}
+
+/* 静态地图 */
+.nav-map-container {
+  margin-top: 8px; border-radius: 8px; overflow: hidden;
+  border: 1px solid #1e3a5f; position: relative;
+}
+.nav-map-img {
+  width: 100%; display: block; border-radius: 8px;
+}
+.nav-map-legend {
+  position: absolute; bottom: 4px; right: 4px;
+  display: flex; gap: 8px;
+  background: rgba(0,0,0,0.6); padding: 3px 8px; border-radius: 4px;
+}
+.legend-item { font-size: 10px; color: #cbd5e1; display: flex; align-items: center; gap: 3px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+.legend-start { background: #22c55e; }
+.legend-end { background: #ef4444; }
+
+/* 高德地图链接 */
+.nav-open-amap {
+  display: block; text-align: center; margin-top: 8px;
+  padding: 6px 12px; border-radius: 6px;
+  background: rgba(37,99,235,0.2); border: 1px solid rgba(37,99,235,0.4);
+  color: #93c5fd; font-size: 12px; text-decoration: none;
+  transition: all 0.2s;
+}
+.nav-open-amap:hover {
+  background: rgba(37,99,235,0.35); color: #bfdbfe;
+}
+
+/* 导航卡片动画 */
+.nav-slide-enter-active { transition: all 0.4s ease-out; }
+.nav-slide-leave-active { transition: all 0.3s ease-in; }
+.nav-slide-enter-from { opacity: 0; transform: translateY(-10px); }
+.nav-slide-leave-to { opacity: 0; transform: translateX(20px); }
 </style>

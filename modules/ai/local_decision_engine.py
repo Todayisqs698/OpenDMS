@@ -2,7 +2,8 @@
 本地决策引擎 — 不依赖网络的毫秒级决策
 
 覆盖场景：
-- 眼动分析：偏离检测 + 严重度分级
+- 5 类独立告警：多人 / 离开摄像头 / 疲劳 / 头部偏离 / 视线偏离
+- 每类独立计时、独立阈值（2s mild / 3s moderate / 5s severe）
 - 手势映射：15+ 手势 → action_code
 - 语音关键词：20+ 常见指令 → action_code
 - 综合判断：多模态信号融合
@@ -14,26 +15,31 @@ logger = logging.getLogger(__name__)
 # ── 手势映射表 ──
 
 GESTURE_MAP = {
+    # 空调控制
+    "open_ac": "TurnOnAC",
+    "close_ac": "TurnOffAC",
+    "confirm_ac": "TurnOnAC",
+
     # 确认/取消类
-    "Thumbs Up": "confirm",
-    "OK": "confirm",
-    "Thumbs Down": "cancel",
-    "Close": "cancel",
-    "Peace": "cancel",
+    "thumbs_up": "confirm",
+    "ok_sign": "confirm",
+    "thumbs_down": "cancel",
+    "peace": "cancel",
 
     # 功能控制类
-    "Open": "PlayMusic",
-    "Point": "TurnOnAC",
-    "Fist": "StopMusic",
-    "Palm": "Navigate",
-    "Swipe Left": "previous_track",
-    "Swipe Right": "next_track",
-    "Swipe Up": "volume_up",
-    "Swipe Down": "volume_down",
+    "index_point": "attention",
+    "three_fingers": "mode_3",
+    "four_fingers": "mode_4",
+    "pinch": "zoom_in",
+    "swipe_left": "previous_track",
+    "swipe_right": "next_track",
+    "palm_up": "volume_up",
+    "palm_down": "volume_down",
 
     # 安全相关
-    "Wave": "attention_confirm",  # 挥手确认注意力恢复
-    "Stop": "emergency_stop",    # 紧急停止
+    "call_me": "call",
+    "rock_on": "mute",
+    "stop": "emergency_stop",
 }
 
 # ── 语音关键词映射表 ──
@@ -41,7 +47,9 @@ GESTURE_MAP = {
 SPEECH_KEYWORD_MAP = {
     # 空调
     "开空调": "TurnOnAC", "打开空调": "TurnOnAC", "太热": "TurnOnAC",
+    "好热": "TurnOnAC", "外面天气好热": "TurnOnAC",
     "关空调": "TurnOffAC", "关闭空调": "TurnOffAC", "太冷": "TurnOffAC",
+    "好冷": "TurnOffAC", "现在好冷": "TurnOffAC",
     "调高温度": "temp_up", "调低温度": "temp_down",
 
     # 音乐
@@ -66,13 +74,183 @@ SPEECH_KEYWORD_MAP = {
     "故障": "knowledge_qa", "报警": "knowledge_qa",
 }
 
-# ── 眼动分析参数 ──
+# ── 5 类告警阈值（统一 2/3/5 秒三级） ──
 
-GAZE_SEVERITY = {
-    "mild": {"threshold": 2.0, "action": "attention_hint", "alert": "请保持视线在前方"},
-    "moderate": {"threshold": 3.0, "action": "distract", "alert": "视线偏离道路，请注意"},
-    "severe": {"threshold": 5.0, "action": "distract", "alert": "严重分心！请立即注视前方"},
+ALERT_CATEGORIES = {
+    "crowd": {
+        "label": "crowd", "label_zh": "多人", "label_en": "Multiple Faces",
+        "alert": "检测到多人，请确认驾驶员身份",
+        # 多人极其危险，触发即 severe
+        "severities": {
+            "mild":     {"threshold": 0.5, "action": "attention_hint"},
+            "moderate": {"threshold": 1.0, "action": "distract"},
+            "severe":   {"threshold": 2.0, "action": "distract"},
+        },
+    },
+    "absence": {
+        "label": "absence", "label_zh": "离开摄像头", "label_en": "Left Camera",
+        "alert": "驾驶员离开摄像头范围",
+        "severities": {
+            "mild":     {"threshold": 2.0, "action": "attention_hint"},
+            "moderate": {"threshold": 3.0, "action": "distract"},
+            "severe":   {"threshold": 5.0, "action": "distract"},
+        },
+    },
+    "fatigue": {
+        "label": "fatigue", "label_zh": "疲劳", "label_en": "Fatigue",
+        "alert": "驾驶员疲劳驾驶，请注意休息",
+        "severities": {
+            "mild":     {"threshold": 2.0, "action": "attention_hint"},
+            "moderate": {"threshold": 3.0, "action": "distract"},
+            "severe":   {"threshold": 5.0, "action": "distract"},
+        },
+    },
+    "head": {
+        "label": "head_deviation", "label_zh": "头部偏离", "label_en": "Head Deviation",
+        "alert": "头部偏离前方，请注意",
+        "severities": {
+            "mild":     {"threshold": 2.0, "action": "attention_hint"},
+            "moderate": {"threshold": 3.0, "action": "distract"},
+            "severe":   {"threshold": 5.0, "action": "distract"},
+        },
+    },
+    "gaze": {
+        "label": "gaze_deviation", "label_zh": "视线偏离", "label_en": "Gaze Deviation",
+        "alert": "视线偏离道路，请注意",
+        "severities": {
+            "mild":     {"threshold": 2.0, "action": "attention_hint"},
+            "moderate": {"threshold": 3.0, "action": "distract"},
+            "severe":   {"threshold": 5.0, "action": "distract"},
+        },
+    },
 }
+
+
+def _severity_for(category: str, duration: float) -> tuple:
+    """
+    根据告警类别和持续时间，返回 (severity_level, params_dict)。
+    未达到 mild 阈值返回 (None, None)。
+    """
+    cat = ALERT_CATEGORIES[category]
+    matched_level = None
+    matched_params = None
+    for level in ("mild", "moderate", "severe"):
+        params = cat["severities"][level]
+        if duration >= params["threshold"]:
+            matched_level = level
+            matched_params = params
+        else:
+            break
+    return matched_level, matched_params
+
+
+def _build_alert(category: str, severity: str, duration: float) -> dict:
+    """构建标准告警返回结构"""
+    cat = ALERT_CATEGORIES[category]
+    params = cat["severities"][severity]
+    return {
+        "action_code": params["action"],
+        "confidence": min(0.8 + duration * 0.03, 0.98),
+        "source": "local",
+        "alert": f"{cat['alert']}（{duration:.0f}秒）",
+        "severity": severity,
+        "alert_category": category,
+        "alert_label": cat["label"],
+    }
+
+
+# ── 5 类告警入口函数 ──
+
+def check_crowd(duration: float, face_count: int = 0) -> dict:
+    """多人检测"""
+    if face_count < 2:
+        return {"action_code": "normal", "confidence": 0.95, "source": "local",
+                "alert_category": "crowd", "alert_label": "多人"}
+    level, params = _severity_for("crowd", duration)
+    if level is None:
+        return {"action_code": "normal", "confidence": 0.8, "source": "local",
+                "alert_category": "crowd", "alert_label": "多人"}
+    return _build_alert("crowd", level, duration)
+
+
+def check_absence(duration: float) -> dict:
+    """离开摄像头检测（无人脸）"""
+    level, params = _severity_for("absence", duration)
+    if level is None:
+        return {"action_code": "normal", "confidence": 0.8, "source": "local",
+                "alert_category": "absence", "alert_label": "离开摄像头"}
+    return _build_alert("absence", level, duration)
+
+
+def check_fatigue(duration: float) -> dict:
+    """疲劳检测（由 camera.py 计算 PERCLOS 后调用）"""
+    level, params = _severity_for("fatigue", duration)
+    if level is None:
+        return {"action_code": "normal", "confidence": 0.8, "source": "local",
+                "alert_category": "fatigue", "alert_label": "疲劳"}
+    return _build_alert("fatigue", level, duration)
+
+
+def check_head_deviation(state: str, duration: float) -> dict:
+    """
+    头部偏离检测。
+    仅当头部姿态明显偏转（含 left/right/up/down）时触发。
+    纯虹膜移动（gaze_state 不含 head_yaw 偏转）不算头部偏离。
+    """
+    if state == "center":
+        return {"action_code": "normal", "confidence": 0.95, "source": "local",
+                "alert_category": "head", "alert_label": "头部偏离"}
+
+    # 判断是否为头部偏转（所有非 center 都算）
+    level, params = _severity_for("head", duration)
+    if level is None:
+        return {"action_code": "normal", "confidence": 0.8, "source": "local",
+                "alert_category": "head", "alert_label": "头部偏离"}
+    cat = ALERT_CATEGORIES["head"]
+    direction_text = {"left": "左偏", "right": "右偏", "up": "上仰", "down": "下俯"}
+    dir_label = direction_text.get(state, state)
+    return {
+        "action_code": params["action"],
+        "confidence": min(0.8 + duration * 0.03, 0.98),
+        "source": "local",
+        "alert": f"头部{dir_label}，{cat['alert']}（{duration:.0f}秒）",
+        "severity": level,
+        "alert_category": "head",
+        "alert_label": cat["label"],
+        "head_direction": state,
+    }
+
+
+def check_gaze_deviation(state: str, duration: float) -> dict:
+    """
+    视线偏离检测（纯虹膜移动）。
+    仅当 gaze_state 不为 center 且不是头部主导的偏转时触发。
+    """
+    if state == "center":
+        return {"action_code": "normal", "confidence": 0.95, "source": "local",
+                "alert_category": "gaze", "alert_label": "视线偏离"}
+
+    level, params = _severity_for("gaze", duration)
+    if level is None:
+        return {"action_code": "normal", "confidence": 0.8, "source": "local",
+                "alert_category": "gaze", "alert_label": "视线偏离"}
+    cat = ALERT_CATEGORIES["gaze"]
+    dir_map = {
+        "left": "左偏", "right": "右偏", "up": "上偏", "down": "下偏",
+        "up_left": "左上偏", "up_right": "右上偏",
+        "down_left": "左下偏", "down_right": "右下偏",
+    }
+    dir_label = dir_map.get(state, state)
+    return {
+        "action_code": params["action"],
+        "confidence": min(0.8 + duration * 0.03, 0.98),
+        "source": "local",
+        "alert": f"视线{dir_label}，{cat['alert']}（{duration:.0f}秒）",
+        "severity": level,
+        "alert_category": "gaze",
+        "alert_label": cat["label"],
+        "gaze_direction": state,
+    }
 
 
 def decide_locally(context: dict) -> dict:
@@ -80,18 +258,26 @@ def decide_locally(context: dict) -> dict:
     本地推理主入口 — 根据触发类型分发。
 
     Args:
-        context: {"trigger": "gaze"|"gesture"|"speech"|"multi",
+        context: {"trigger": "gaze"|"gesture"|"speech"|"multi"|"fatigue"|"absence"|"crowd",
                   "data": {...trigger-specific data...}}
 
     Returns:
         {"action_code": "...", "confidence": 0.95, "source": "local",
-         "alert": "..." (仅告警场景)}
+         "alert": "...", "severity": "...", "alert_category": "...", "alert_label": "..."}
     """
     trigger = context.get("trigger", "")
     data = context.get("data", {})
 
-    if trigger == "gaze":
-        return _handle_gaze(data)
+    if trigger == "crowd":
+        return check_crowd(data.get("duration", 0), data.get("face_count", 0))
+    elif trigger == "absence":
+        return check_absence(data.get("duration", 0))
+    elif trigger == "fatigue":
+        return check_fatigue(data.get("duration", 0))
+    elif trigger == "head":
+        return check_head_deviation(data.get("state", "center"), data.get("duration", 0))
+    elif trigger == "gaze":
+        return check_gaze_deviation(data.get("state", "center"), data.get("duration", 0))
     elif trigger == "gesture":
         return _handle_gesture(data)
     elif trigger == "speech":
@@ -103,37 +289,6 @@ def decide_locally(context: dict) -> dict:
 
 
 # ── 各模态处理 ──
-
-def _handle_gaze(data: dict) -> dict:
-    """眼动分析：偏离方向 + 持续时间 → 严重度分级"""
-    state = data.get("state", "center")
-    duration = float(data.get("duration", 0))
-
-    if state == "center":
-        return {"action_code": "normal", "confidence": 0.95, "source": "local"}
-
-    # 偏离不足 2 秒：仅标记方向，不告警
-    if duration < 2.0:
-        return {"action_code": "normal", "confidence": 0.8, "source": "local"}
-
-    # 按严重度分级
-    matched = "mild"
-    for level, params in sorted(GAZE_SEVERITY.items(),
-                                 key=lambda x: x[1]["threshold"]):
-        if duration >= params["threshold"]:
-            matched = level
-        else:
-            break
-
-    params = GAZE_SEVERITY[matched]
-    return {
-        "action_code": params["action"],
-        "confidence": min(0.8 + duration * 0.03, 0.98),
-        "source": "local",
-        "alert": f"{params['alert']}（{duration:.0f}秒）",
-        "severity": matched,
-    }
-
 
 def _handle_gesture(data: dict) -> dict:
     """手势识别：手势名 → action_code"""
@@ -180,6 +335,7 @@ def _handle_multi(data: dict) -> dict:
     多模态综合判断。
 
     规则：
+    - 多人/离开/疲劳 → 最高优先级
     - 眼动偏离 + 任何手势/语音 → 眼动优先（安全问题）
     - 手势 + 语音不一致 → 语音优先（更明确）
     - 只有手势 → 手势为准
@@ -188,10 +344,22 @@ def _handle_multi(data: dict) -> dict:
     gesture = data.get("gesture", {})
     speech = data.get("speech", {})
 
-    # 安全优先：眼动偏离 → 忽略其他模态
+    # 安全最高优先：多人/离开/疲劳
+    crowd = data.get("crowd", {})
+    absence = data.get("absence", {})
+    fatigue = data.get("fatigue", {})
+
+    if crowd.get("active"):
+        return check_crowd(crowd.get("duration", 0), crowd.get("face_count", 0))
+    if absence.get("active"):
+        return check_absence(absence.get("duration", 0))
+    if fatigue.get("active"):
+        return check_fatigue(fatigue.get("duration", 0))
+
+    # 眼动优先
     gaze_state = gaze.get("state", "center")
     if gaze_state != "center" and gaze.get("duration", 0) > 2:
-        return _handle_gaze(gaze)
+        return check_gaze_deviation(gaze_state, gaze.get("duration", 0))
 
     # 语音优先
     speech_text = speech.get("text", "")

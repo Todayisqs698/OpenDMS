@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <section class="panel ai-decision-panel">
     <!-- 标题栏 -->
     <h2>

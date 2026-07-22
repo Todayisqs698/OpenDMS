@@ -29,21 +29,32 @@ import time
 from datetime import datetime
 from typing import Optional, Dict, Any
 
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), '.env'))
+
 logger = logging.getLogger(__name__)
 
 # ── 天气 API 配置 ──
-OPENWEATHER_URL = (
-    "http://api.openweathermap.org/data/2.5/weather"
-    "?q={city}&appid=e8527d822a260a90258bbbcf110506e8"
-    "&units=metric&lang=zh_cn"
-)
-# OpenWeatherMap 也支持按坐标查询（用于 GPS 定位）
-OPENWEATHER_GEO_URL = (
-    "http://api.openweathermap.org/data/2.5/weather"
-    "?lat={lat}&lon={lon}&appid=e8527d822a260a90258bbbcf110506e8"
-    "&units=metric&lang=zh_cn"
-)
-WTTR_URL = "http://wttr.in/{city}?format=j1"
+def _get_openweather_key() -> str:
+    """从环境变量读取 OpenWeatherMap API Key"""
+    return os.getenv("OPENWEATHER_API_KEY", "")
+
+def _build_openweather_url(city: str = None, lat: float = None, lon: float = None) -> str:
+    """构建 OpenWeatherMap 请求 URL（API Key 从环境变量读取）"""
+    key = _get_openweather_key()
+    if not key:
+        logger.warning("OPENWEATHER_API_KEY 未配置，OpenWeatherMap 数据源不可用")
+        return ""
+    if lat is not None and lon is not None:
+        return (
+            f"https://api.openweathermap.org/data/2.5/weather"
+            f"?lat={lat}&lon={lon}&appid={key}&units=metric&lang=zh_cn"
+        )
+    return (
+        f"https://api.openweathermap.org/data/2.5/weather"
+        f"?q={city}&appid={key}&units=metric&lang=zh_cn"
+    )
+WTTR_URL = "https://wttr.in/{city}?format=j1"
 DEFAULT_CITY = "Beijing"
 
 # ── GPS 反查城市配置 ──
@@ -53,7 +64,11 @@ AMAP_REVERSE_URL = (
     "https://restapi.amap.com/v3/geocode/regeo"
     "?location={lon},{lat}&key={key}&extensions=base"
 )
-AMAP_KEY = os.getenv("AMAP_API_KEY", "")
+
+
+def _get_amap_key():
+    """动态读取高德 API Key"""
+    return os.getenv("AMAP_API_KEY", "")
 
 # ── 天气→中文+图标映射 ──
 WEATHER_META = {
@@ -254,7 +269,7 @@ class EnvironmentAgent:
     # ── 天气获取（双源）──
 
     def _fetch_weather(self, city: str, lat: float = None, lon: float = None) -> dict:
-        """获取天气数据：优先 OpenWeatherMap（支持 GPS），失败降级 wttr.in"""
+        """获取天气数据：优先高德天气（国内快），降级 OpenWeatherMap，再降级 wttr.in"""
         now_ts = time.time()
 
         # 缓存键：有 GPS 坐标时用坐标做 key，否则用城市名
@@ -266,8 +281,11 @@ class EnvironmentAgent:
             if (now_ts - cached_time) < self._cache_ttl:
                 return cached_data
 
-        # 尝试 OpenWeatherMap（有坐标时用坐标查询，更精准）
-        result = self._try_openweather(city, lat=lat, lon=lon)
+        # 优先：高德天气 API（国内快速）
+        result = self._try_amap_weather(city)
+        if result is None:
+            # 降级 OpenWeatherMap
+            result = self._try_openweather(city, lat=lat, lon=lon)
         if result is None:
             # 降级 wttr.in
             result = self._try_wttr(city)
@@ -282,15 +300,86 @@ class EnvironmentAgent:
         )
         return result
 
+    def _try_amap_weather(self, city: str) -> Optional[dict]:
+        """高德天气 API（国内快速，需要 adcode）"""
+        amap_key = _get_amap_key()
+        if not amap_key:
+            return None
+        try:
+            import httpx
+
+            # Step 1: 城市名 → adcode（高德地理编码 API）
+            geo_url = f"https://restapi.amap.com/v3/geocode/geo?address={city}&key={amap_key}"
+            geo_resp = httpx.get(geo_url, timeout=5.0)
+            if geo_resp.status_code != 200:
+                return None
+            geo_data = geo_resp.json()
+            if geo_data.get("status") != "1" or not geo_data.get("geocodes"):
+                return None
+            adcode = geo_data["geocodes"][0].get("adcode", "")
+            if not adcode:
+                return None
+
+            # Step 2: adcode → 天气实况
+            weather_url = f"https://restapi.amap.com/v3/weather/weatherInfo?city={adcode}&key={amap_key}&extensions=base"
+            w_resp = httpx.get(weather_url, timeout=5.0)
+            if w_resp.status_code != 200:
+                return None
+            w_data = w_resp.json()
+            if w_data.get("status") != "1" or not w_data.get("lives"):
+                return None
+
+            live = w_data["lives"][0]
+            weather_text = live.get("weather", "")  # 如"晴"、"小雨"
+            temp = self._safe_float(live.get("temperature"))
+            humidity = self._safe_int(live.get("humidity"))
+            wind_dir = live.get("winddirection", "")
+            wind_power = live.get("windpower", "")  # 如"≤3级"
+
+            # 风力等级 → 风速 km/h（粗略换算）
+            wind_kmph = 0
+            if wind_power:
+                try:
+                    level = int(wind_power.replace("≤", "").replace("级", ""))
+                    wind_kmph = level * 5  # 粗略：1级≈5km/h
+                except ValueError:
+                    pass
+
+            # 天气描述 → 类型映射
+            weather_type = "unknown"
+            for kw, wtype in WEATHER_KEYWORDS.items():
+                if kw in weather_text:
+                    weather_type = wtype
+                    break
+
+            meta = WEATHER_META.get(weather_type, WEATHER_META["unknown"])
+
+            return {
+                "temperature": temp,
+                "humidity": humidity,
+                "weather": weather_type,
+                "weather_icon": meta["icon"],
+                "weather_emoji": meta["emoji"],
+                "weather_desc": weather_text,
+                "wind_speed": wind_kmph,
+                "wind_direction": wind_dir,
+                "visibility": None,
+                "data_source": "amap",
+                "report_time": live.get("reporttime", ""),
+            }
+
+        except Exception as e:
+            logger.debug(f"高德天气查询失败: {e}")
+            return None
+
     def _try_openweather(self, city: str, lat: float = None, lon: float = None) -> Optional[dict]:
         """OpenWeatherMap API（支持城市名或 GPS 坐标查询）"""
         try:
             import httpx
-            if lat is not None and lon is not None:
-                url = OPENWEATHER_GEO_URL.format(lat=lat, lon=lon)
-            else:
-                url = OPENWEATHER_URL.format(city=city)
-            resp = httpx.get(url, timeout=3.0)
+            url = _build_openweather_url(city=city, lat=lat, lon=lon)
+            if not url:
+                return None  # API Key 未配置
+            resp = httpx.get(url, timeout=8.0)
             if resp.status_code != 200:
                 return None
             data = resp.json()
@@ -328,7 +417,7 @@ class EnvironmentAgent:
         try:
             import httpx
             url = WTTR_URL.format(city=city)
-            resp = httpx.get(url, timeout=3.0)
+            resp = httpx.get(url, timeout=8.0)
             if resp.status_code != 200:
                 return None
 
@@ -369,10 +458,11 @@ class EnvironmentAgent:
         优先用高德 API（精确到区/县），失败时尝试从 OpenWeatherMap 返回的城市名提取。
         """
         # 方案 1：高德 regeo API（如果配置了 key）
-        if AMAP_KEY:
+        amap_key = _get_amap_key()
+        if amap_key:
             try:
                 import httpx
-                url = AMAP_REVERSE_URL.format(lat=lat, lon=lon, key=AMAP_KEY)
+                url = AMAP_REVERSE_URL.format(lat=lat, lon=lon, key=amap_key)
                 resp = httpx.get(url, timeout=3.0)
                 if resp.status_code == 200:
                     data = resp.json()
@@ -387,7 +477,9 @@ class EnvironmentAgent:
         # 方案 2：从 OpenWeatherMap 返回的城市名提取
         try:
             import httpx
-            url = OPENWEATHER_GEO_URL.format(lat=lat, lon=lon)
+            url = _build_openweather_url(lat=lat, lon=lon)
+            if not url:
+                return None  # API Key 未配置
             resp = httpx.get(url, timeout=3.0)
             if resp.status_code == 200:
                 data = resp.json()

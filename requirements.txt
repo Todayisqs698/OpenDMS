@@ -6,11 +6,14 @@ opencv-python>=4.8.0
 mediapipe>=0.10.30
 numpy>=1.24.0
 
-# 手势识别 (TFLite模型推理)
-tensorflow>=2.15,<2.17
+# 手势识别 (MediaPipe Tasks API, 不需要 TensorFlow)
 
-# 语音 (可选)
-webrtcvad>=2.1.0
+# 语音
+sounddevice>=0.5.2
+webrtcvad>=2.0.7
+openai-whisper>=20240930
+noisereduce>=3.0.0
+edge-tts>=6.1.0
 
 # LLM & AI
 openai>=1.30.0

@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="dashboard">
     <header class="top-bar">
       <span class="top-left">EdgeGuard v1.0</span>
@@ -16,8 +16,13 @@
       <GaugePanel :data="driverState" />
       <AlertPanel :decision="lastDecision" />
       <AiPanel :decision="lastDecision" :driverState="driverState" />
-      <VoicePanel :data="driverState" />
+      <ACPanel ref="acPanelRef" :data="driverState" />
+      <MusicPanel ref="musicPanelRef" :data="driverState" />
+      <AgentThinkingPanel ref="agentPanelRef" :data="driverState" />
+      <VoicePanel :data="driverState" @ac-command="handleAcCommand" @music-command="handleMusicCommand" @orchestrator-actions="handleOrchestratorActions" @agent-start="handleAgentStart" />
+      <GesturePanel :data="driverState" @ac-command="handleAcCommand" @music-command="handleMusicCommand" />
       <NavPanel :data="driverState" />
+      <AgentResultPanel :data="driverState" />
     </main>
 
     <!-- 摄像头实时画面浮窗（可拖拽可缩放） -->
@@ -89,16 +94,82 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import GaugePanel from '../components/GaugePanel.vue'
 import AlertPanel from '../components/AlertPanel.vue'
 import AiPanel from '../components/AiPanel.vue'
+import ACPanel from '../components/ACPanel.vue'
+import MusicPanel from '../components/MusicPanel.vue'
+import AgentThinkingPanel from '../components/AgentThinkingPanel.vue'
+import AgentResultPanel from '../components/AgentResultPanel.vue'
 import VoicePanel from '../components/VoicePanel.vue'
+import GesturePanel from '../components/GesturePanel.vue'
 import NavPanel from '../components/NavPanel.vue'
 
 const currentTime = ref('')
 const cameraStatus = ref('连接中...')
+const gazeTextMap = { center: '前方', left: '左偏', right: '右偏', up: '上偏', down: '下偏', up_left: '左上偏', up_right: '右上偏', down_left: '左下偏', down_right: '右下偏', lost: '丢失' }
 const driverState = ref({ gaze: '--', gesture: '--', speech: '', route: 'camera', perclos: null, blink_rate: null, fatigue_score: null, fatigue_level: null })
 const lastDecision = ref({ action_code: 'normal' })
 const cameraCanvas = ref(null)
+const acPanelRef = ref(null)
+const musicPanelRef = ref(null)
+const agentPanelRef = ref(null)
 const insightMsg = ref('')
 const isOffline = ref(false)
+
+// 空调指令统一处理
+const AC_COMMANDS = ['TurnOnAC', 'TurnOffAC', 'temp_up', 'temp_down', 'set']
+function handleAcCommand(payload) {
+  if (!acPanelRef.value) return
+  if (typeof payload === 'string') {
+    if (AC_COMMANDS.includes(payload)) acPanelRef.value.onCommand(payload)
+  } else if (payload && payload.command) {
+    if (AC_COMMANDS.includes(payload.command)) acPanelRef.value.onCommand(payload)
+  }
+}
+
+// 音乐指令统一处理
+const MUSIC_COMMANDS = ['PlayMusic', 'StopMusic', 'next_track', 'previous_track', 'volume_up', 'volume_down']
+function handleMusicCommand(command) {
+  if (MUSIC_COMMANDS.includes(command) && musicPanelRef.value) {
+    musicPanelRef.value.onCommand(command)
+  }
+}
+
+// 编排器返回的 actions 统一路由
+const MUSIC_ACTION_MAP = {
+  'play': 'PlayMusic',
+  'pause': 'StopMusic',
+  'next': 'next_track',
+  'prev': 'previous_track',
+  'vol_up': 'volume_up',
+  'vol_down': 'volume_down',
+}
+function handleOrchestratorActions(actions) {
+  if (!actions || !actions.length) return
+  for (const action of actions) {
+    if (action.type === 'ac') {
+      const payload = { command: action.command }
+      if (action.params) payload.params = action.params
+      handleAcCommand(payload)
+    } else if (action.type === 'music') {
+      const cmd = MUSIC_ACTION_MAP[action.command] || action.command
+      if (MUSIC_COMMANDS.includes(cmd)) {
+        handleMusicCommand(cmd)
+      }
+    } else if (action.type === 'alert') {
+      // 安全告警 — 触发提示音 + 显示在 insight toast
+      if (action.level === 'dangerous') {
+        speakAlert('请立即注视前方道路')
+      }
+    }
+  }
+}
+
+// VoicePanel 发起 Agent 请求时联动 AgentThinkingPanel
+function handleAgentStart() {
+  if (agentPanelRef.value) {
+    agentPanelRef.value.clearSteps()
+    agentPanelRef.value.setThinking()
+  }
+}
 setInterval(async () => {
   try {
     const r = await fetch('http://localhost:8000/api/status')
@@ -360,6 +431,11 @@ async function refreshCamera() {
     const severity = resp.headers.get('X-Severity')
     const confidence = parseFloat(resp.headers.get('X-Confidence')) || 0
 
+    // 空调指令拦截
+    if (AC_COMMANDS.includes(action)) handleAcCommand(action)
+    // 音乐指令拦截
+    if (MUSIC_COMMANDS.includes(action)) handleMusicCommand(action)
+
     // 告警统计 + 离线备用提示音
     if (alert === '1') {
       const now = Date.now()
@@ -383,10 +459,15 @@ async function refreshCamera() {
       goodDrivingSince = 0
     }
     // AI 事件触发（偏离需持续3秒以上，意外短暂瞥一眼不打扰）
+    // gaze 方向: center, left, right, up, down, up_left, up_right, down_left, down_right, lost
+    // 含 left/right 的视为水平偏离（分心），纯 up/down 视为轻微偏离，center 为正常
+    const isLateralDistraction = gaze && gaze !== 'center' && gaze !== 'lost' && (gaze.includes('left') || gaze.includes('right'))
+    const isAnyDistraction = gaze && gaze !== 'center' && gaze !== 'lost'
+
     if (alert === '1' && lastAlertState === '0' && severity === 'severe') triggerInsight('严重分心')
-    else if (gaze !== 'center' && lastGaze === 'center') {
+    else if (isLateralDistraction && lastGaze === 'center') {
       sustainedGazeFrames = 0
-    } else if (gaze !== 'center' && gaze === lastGaze) {
+    } else if (isLateralDistraction && gaze === lastGaze) {
       sustainedGazeFrames++
       if (sustainedGazeFrames === 15) triggerInsight('持续视线偏离')  // ~3秒
     }
@@ -414,6 +495,8 @@ async function refreshCamera() {
     // 注意力评分 + 冲突检测
     if (gaze === 'center') { goodFrames++; badFrames = Math.max(0, badFrames - 1) }
     else if (gaze === 'lost') { badFrames += 2 }
+    else if (isLateralDistraction) { badFrames++ }  // 水平偏离扣分多
+    else if (isAnyDistraction) { badFrames += 0.5 }   // 纯上下偏离扣分少
     else { badFrames++ }
     const total = goodFrames + badFrames
     attentionScore.value = total > 0 ? Math.round(goodFrames / total * 100) : 100
@@ -432,7 +515,7 @@ async function refreshCamera() {
     }
 
 
-    cameraStatus.value = gaze || 'error'
+    cameraStatus.value = gazeTextMap[gaze] || gaze || 'error'
     const perclos = parseFloat(resp.headers.get('X-Perclos')) || 0
     const blinkRate = parseFloat(resp.headers.get('X-BlinkRate')) || 0
     const fatigueScore = parseInt(resp.headers.get('X-FatigueScore')) || 0
@@ -534,7 +617,7 @@ body { background: #0a0e17; color: #e0e6ed; font-family: 'Microsoft YaHei', sans
 .main-grid {
   flex: 1; display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  grid-template-rows: 1fr 1fr;
+  grid-template-rows: 1fr 1fr 1fr 1fr;
   gap: 12px; padding: 12px;
 }
 
@@ -551,6 +634,11 @@ body { background: #0a0e17; color: #e0e6ed; font-family: 'Microsoft YaHei', sans
 .ai-panel { grid-row: 1 / 3; grid-column: 3; }
 .voice-panel { grid-row: 2; grid-column: 1; }
 .nav-panel { grid-row: 2; grid-column: 2; }
+.agent-panel { grid-row: 3; grid-column: 1; }
+.agent-result-panel { grid-row: 3; grid-column: 2 / 4; }
+.ac-panel { grid-row: 4; grid-column: 1; }
+.music-panel { grid-row: 4; grid-column: 2; }
+.gesture-panel { grid-row: 4; grid-column: 3; }
 
 .metric { padding: 6px 0; font-size: 14px; border-bottom: 1px solid #1e293b; color: #cbd5e1; }
 
