@@ -663,6 +663,46 @@ async def environment(city: str = "", lat: float = None, lon: float = None):
 
 
 @app.post("/api/environment")
+
+class NavRouteRequest(BaseModel):
+    destination: str = ""
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
+
+@app.post("/api/navigation/route")
+def nav_route(req: NavRouteRequest):
+    """规划从当前位置到目的地的驾车路线。免费 API，零依赖。"""
+    from modules.ai.navigation_service import get_navigation_service
+
+    svc = get_navigation_service()
+    result = svc.plan(req.lat, req.lon, req.destination)
+
+    # 推送结构化导航数据到前端
+    try:
+        asyncio.run_coroutine_threadsafe(
+            ws_manager.broadcast({"type": "navigation", "data": result}),
+            asyncio.get_running_loop(),
+        )
+    except RuntimeError:
+        pass  # 不在事件循环中，跳过推送
+
+    return result
+
+
+# ── GPS 位置上报 ──
+
+class LocationRequest(BaseModel):
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    city: Optional[str] = None
+
+
+class EnvironmentRequest(BaseModel):
+    city: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+
 def environment_post(req: EnvironmentRequest):
     """
     环境分析（POST 版本，支持 GPS 坐标自动反查城市）。
@@ -1092,46 +1132,6 @@ def prompts_export_md():
 
 
 # ── 导航路线规划（免费 API：Nominatim + OSRM，无需 Key）──
-
-class NavRouteRequest(BaseModel):
-    destination: str = ""
-    lat: Optional[float] = None
-    lon: Optional[float] = None
-
-
-@app.post("/api/navigation/route")
-def nav_route(req: NavRouteRequest):
-    """规划从当前位置到目的地的驾车路线。免费 API，零依赖。"""
-    from modules.ai.navigation_service import get_navigation_service
-
-    svc = get_navigation_service()
-    result = svc.plan(req.lat, req.lon, req.destination)
-
-    # 推送结构化导航数据到前端
-    try:
-        asyncio.run_coroutine_threadsafe(
-            ws_manager.broadcast({"type": "navigation", "data": result}),
-            asyncio.get_running_loop(),
-        )
-    except RuntimeError:
-        pass  # 不在事件循环中，跳过推送
-
-    return result
-
-
-# ── GPS 位置上报 ──
-
-class LocationRequest(BaseModel):
-    lat: Optional[float] = None
-    lon: Optional[float] = None
-    city: Optional[str] = None
-
-
-class EnvironmentRequest(BaseModel):
-    city: Optional[str] = None
-    lat: Optional[float] = None
-    lon: Optional[float] = None
-
 
 @app.post("/api/location")
 def update_location(req: LocationRequest):
