@@ -23,6 +23,7 @@ import json
 import logging
 import operator
 import time
+import concurrent.futures
 from typing import TypedDict
 try:
     from typing import Annotated
@@ -287,33 +288,34 @@ def tool_node(state: dict) -> dict:
         logger.warning("tool_node: 最后一条消息不包含 tool_calls")
         return {"task_complete": True, "final_response": state.get("final_response", "")}
 
-    tool_results = []
-    for tc in tool_calls:
+    def _exec_one(tc):
+        """执行单个工具调用，返回 tool message"""
         tool_name = tc["function"]["name"]
         tool_call_id = tc.get("id", "")
-
-        # 解析参数 JSON
         try:
             arguments = json.loads(tc["function"]["arguments"])
         except (json.JSONDecodeError, TypeError):
-            logger.error(
-                "tool_node: 无法解析工具参数, raw=%s", tc["function"]["arguments"]
-            )
+            logger.error("tool_node: 无法解析工具参数, raw=%s", tc["function"]["arguments"])
             arguments = {}
-
         logger.info("tool_node: 执行工具 %s, args=%s", tool_name, arguments)
-
         result = execute_tool(tool_name, arguments)
         result_json = json.dumps(result, ensure_ascii=False)
-
-        tool_results.append({
+        logger.info("tool_node: %s 结果=%s", tool_name, result_json[:200])
+        return {
             "role": "tool",
             "name": tool_name,
             "content": result_json,
             "tool_call_id": tool_call_id,
-        })
+        }
 
-        logger.info("tool_node: %s 结果=%s", tool_name, result_json[:200])
+    # 多工具并行执行（如 get_weather + search_knowledge 互不依赖）
+    if len(tool_calls) == 1:
+        tool_results = [_exec_one(tool_calls[0])]
+    else:
+        logger.info("tool_node: 并行执行 %d 个工具: %s",
+                     len(tool_calls), [tc["function"]["name"] for tc in tool_calls])
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            tool_results = list(pool.map(_exec_one, tool_calls))
 
     return {"messages": tool_results}
 
