@@ -1,11 +1,30 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="zh-CN" class="dark">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>EdgeGuard — 车载多模态AI系统</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0b1220" />
+  <meta name="color-scheme" content="dark" />
+  <title>EdgeGuard · 智能驾驶安全助手</title>
+
+  <!-- Geist 字体（等效 next/font/google） -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --font-geist-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+      --font-geist-mono: 'Geist Mono', ui-monospace, monospace;
+    }
+  </style>
+
+  <!-- Leaflet 交互式地图（CDN，无需 npm 安装）-->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 </head>
-<body>
+<body class="bg-background font-sans antialiased">
   <div id="app"></div>
   <script type="module" src="/src/main.js"></script>
 </body>

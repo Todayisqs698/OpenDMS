@@ -1,0 +1,172 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-safe: var(--safe);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-panel: var(--panel);
+  --color-panel-foreground: var(--panel-foreground);
+
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+}
+
+:root {
+  --radius: 1rem;
+
+  /* 浅色主题 */
+  --background: oklch(0.98 0.01 255);
+  --foreground: oklch(0.15 0.03 255);
+
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.15 0.03 255);
+
+  --panel: oklch(0.96 0.01 255);
+  --panel-foreground: oklch(0.15 0.03 255);
+
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.15 0.03 255);
+
+  --primary: oklch(0.5 0.15 230);
+  --primary-foreground: oklch(1 0 0);
+
+  --secondary: oklch(0.94 0.01 255);
+  --secondary-foreground: oklch(0.15 0.03 255);
+
+  --muted: oklch(0.94 0.01 255);
+  --muted-foreground: oklch(0.45 0.02 245);
+
+  --accent: oklch(0.9 0.03 200);
+  --accent-foreground: oklch(0.15 0.03 255);
+
+  --safe: oklch(0.55 0.17 165);
+  --warn: oklch(0.6 0.15 80);
+  --danger: oklch(0.55 0.2 25);
+  --destructive: oklch(0.55 0.2 25);
+
+  --border: oklch(0 0 0 / 10%);
+  --input: oklch(0 0 0 / 12%);
+  --ring: oklch(0.5 0.15 230);
+
+  --chart-1: oklch(0.5 0.15 230);
+  --chart-2: oklch(0.55 0.17 165);
+  --chart-3: oklch(0.6 0.15 80);
+  --chart-4: oklch(0.55 0.2 25);
+  --chart-5: oklch(0.55 0.1 260);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --background: oklch(0.16 0.02 255);
+  --foreground: oklch(0.96 0.01 240);
+
+  --card: oklch(0.21 0.022 255);
+  --card-foreground: oklch(0.96 0.01 240);
+
+  --panel: oklch(0.235 0.024 255);
+  --panel-foreground: oklch(0.96 0.01 240);
+
+  --popover: oklch(0.21 0.022 255);
+  --popover-foreground: oklch(0.96 0.01 240);
+
+  --primary: oklch(0.82 0.13 195);
+  --primary-foreground: oklch(0.18 0.03 240);
+
+  --secondary: oklch(0.28 0.025 255);
+  --secondary-foreground: oklch(0.96 0.01 240);
+
+  --muted: oklch(0.28 0.02 255);
+  --muted-foreground: oklch(0.68 0.02 245);
+
+  --accent: oklch(0.3 0.03 200);
+  --accent-foreground: oklch(0.96 0.01 240);
+
+  --safe: oklch(0.78 0.17 165);
+  --warn: oklch(0.82 0.15 80);
+  --danger: oklch(0.66 0.2 25);
+  --destructive: oklch(0.66 0.2 25);
+
+  --border: oklch(1 0 0 / 9%);
+  --input: oklch(1 0 0 / 12%);
+  --ring: oklch(0.82 0.13 195);
+
+  --chart-1: oklch(0.82 0.13 195);
+  --chart-2: oklch(0.78 0.17 165);
+  --chart-3: oklch(0.82 0.15 80);
+  --chart-4: oklch(0.66 0.2 25);
+  --chart-5: oklch(0.7 0.1 260);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+    outline-color: color-mix(in oklch, var(--ring) 50%, transparent);
+  }
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+  }
+  img {
+    display: block;
+    max-width: 100%;
+  }
+  canvas {
+    display: block;
+  }
+}
+
+/* HMI animations */
+@keyframes hmi-breathe {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+@keyframes hmi-pulse-ring {
+  0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--danger) 55%, transparent); }
+  70% { box-shadow: 0 0 0 12px color-mix(in oklch, var(--danger) 0%, transparent); }
+  100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--danger) 0%, transparent); }
+}
+.animate-hmi-breathe { animation: hmi-breathe 2.4s ease-in-out infinite; }
+.animate-hmi-pulse { animation: hmi-pulse-ring 1.8s ease-out infinite; }
+
+/* Leaflet tiles override — Tailwind preflight 会让地图瓦片坍缩，必须重置 */
+.leaflet-tile {
+  max-width: none !important;
+  height: auto !important;
+}
+.leaflet-container img {
+  max-width: none !important;
+}

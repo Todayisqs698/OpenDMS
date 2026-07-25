@@ -544,13 +544,13 @@ class InteractionAgent:
 只回复意图说明，不要加其他内容。"""
 
             response = deepseek_client.client.chat.completions.create(
-                model="deepseek-chat",
+                model="deepseek-v4-flash",
                 messages=[
                     {"role": "system", "content": "你是车载助手，只回复简短意图说明。"},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
-                max_tokens=50,
+                max_tokens=4096,
                 timeout=5,
             )
             return f"「{text}」的意图分析：{response.choices[0].message.content}"

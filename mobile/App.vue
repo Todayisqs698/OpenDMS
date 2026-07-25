@@ -7,7 +7,6 @@ export default {
     onHide() {},
 }
 </script>
-
 <style>
 /* 全局样式 */
 page {

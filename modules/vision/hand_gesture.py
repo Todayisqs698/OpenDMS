@@ -41,34 +41,48 @@ class HandGestureDetector:
     """MediaPipe HandLandmarker + TFLite KeyPointClassifier"""
 
     def __init__(self):
-        if not os.path.exists(_MODEL_PATH):
-            raise FileNotFoundError(f"手部模型不存在: {_MODEL_PATH}")
-        if not os.path.exists(_KEYPOINT_MODEL):
-            raise FileNotFoundError(f"分类模型不存在: {_KEYPOINT_MODEL}")
-
-        # HandLandmarker (Tasks API)
-        from mediapipe.tasks import python as mp_tasks
-        from mediapipe.tasks.python import vision
-
-        options = vision.HandLandmarkerOptions(
-            base_options=mp_tasks.BaseOptions(model_asset_path=_MODEL_PATH),
-            running_mode=vision.RunningMode.VIDEO,
-            num_hands=1,
-        )
-        self.landmarker = vision.HandLandmarker.create_from_options(options)
-
-        # TFLite KeyPointClassifier
-        from modules.vision.gesture.keypoint_classifier import KeyPointClassifier
-        self.classifier = KeyPointClassifier(model_path=_KEYPOINT_MODEL)
-        self.labels = _load_labels()
-        logger.info(f"手势分类器就绪: {len(self.labels)} 类")
-
+        self.is_available = False
+        self.landmarker = None
+        self.classifier = None
+        self.labels = []
         self._timestamp = 0
         self._last_gesture = None
         self._stable_count = 0
 
+        # 检查模型文件 — 缺失时优雅降级，不抛异常
+        if not os.path.exists(_MODEL_PATH):
+            logger.warning(f"手势模型缺失: {_MODEL_PATH}，手势识别降级为不可用")
+            return
+        if not os.path.exists(_KEYPOINT_MODEL):
+            logger.warning(f"分类模型缺失: {_KEYPOINT_MODEL}，手势识别降级为不可用")
+            return
+
+        try:
+            # HandLandmarker (Tasks API)
+            from mediapipe.tasks import python as mp_tasks
+            from mediapipe.tasks.python import vision
+
+            options = vision.HandLandmarkerOptions(
+                base_options=mp_tasks.BaseOptions(model_asset_path=_MODEL_PATH),
+                running_mode=vision.RunningMode.VIDEO,
+                num_hands=1,
+            )
+            self.landmarker = vision.HandLandmarker.create_from_options(options)
+
+            # TFLite KeyPointClassifier
+            from modules.vision.gesture.keypoint_classifier import KeyPointClassifier
+            self.classifier = KeyPointClassifier(model_path=_KEYPOINT_MODEL)
+            self.labels = _load_labels()
+            self.is_available = True
+            logger.info(f"手势分类器就绪: {len(self.labels)} 类")
+        except Exception as e:
+            logger.warning(f"手势识别初始化失败，降级为不可用: {e}")
+
     def process(self, frame):
         """返回 (gesture_name | None, confidence)"""
+        if not self.is_available:
+            return None, 0.0
+
         import mediapipe as mp
 
         self._timestamp += 1

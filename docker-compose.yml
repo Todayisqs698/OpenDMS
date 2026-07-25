@@ -1,0 +1,39 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend
+    container_name: edgeguard-backend
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data          # 知识库 & FAISS 索引持久化
+      - ./modules:/app/modules     # 热更新模块代码
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend
+    container_name: edgeguard-frontend
+    ports:
+      - "8005:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  music-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: music-api
+    container_name: edgeguard-music
+    ports:
+      - "3000:3000"
+    restart: unless-stopped

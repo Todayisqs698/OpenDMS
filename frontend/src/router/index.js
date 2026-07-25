@@ -3,7 +3,11 @@ import DashboardView from '../views/DashboardView.vue'
 
 const routes = [
   { path: '/', name: 'dashboard', component: DashboardView },
-  // TODO: 组员各自加自己的页面路由
+  {
+    path: '/report',
+    name: 'report',
+    component: () => import('../views/ReportView.vue'),
+  },
 ]
 
 const router = createRouter({

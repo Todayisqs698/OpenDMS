@@ -39,6 +39,20 @@ class WSManager:
         self._heartbeat_task: Optional[asyncio.Task] = None
         self._cleanup_task: Optional[asyncio.Task] = None
 
+        # 主事件循环引用（供线程安全的同步广播使用）
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+
+    def set_event_loop(self, loop: asyncio.AbstractEventLoop):
+        """由 lifespan 注入主事件循环"""
+        self._loop = loop
+
+    def broadcast_sync(self, data: dict):
+        """线程安全同步广播 — 供 camera 线程调用"""
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(self.broadcast(data), self._loop)
+        else:
+            logger.debug("WS loop not available, skip broadcast")
+
     async def connect(self, websocket: WebSocket, client_id: str):
         """接受连接并注册客户端"""
         await websocket.accept()

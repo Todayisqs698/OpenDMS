@@ -134,6 +134,22 @@ class SafetyAgent:
             alert_text = ""
             self.consecutive_warnings = 0
 
+        # 自动持久化：非 normal 风险写入数据库
+        if risk_level != "normal":
+            try:
+                from backend.app.core.database import insert_alert_record
+                insert_alert_record(
+                    session_id=1,           # TODO: 后续对接真实会话管理
+                    risk_level=risk_level,
+                    alert_msg=alert_text,
+                    perclos=perclos,
+                    blink_rate=blink_rate,
+                    fatigue_score=fatigue_score
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"告警落库失败: {e}")
+
         # 修改1：将alert改为alert_msg，匹配main.py读取字段
         return {
             "risk_level": risk_level,

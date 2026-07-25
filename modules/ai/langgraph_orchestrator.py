@@ -6,6 +6,7 @@ LangGraph 多 Agent 编排引擎 — 真正的状态图编排
 所有 Agent 调用走 safe_executor，任何 Agent 崩了都不影响主流程。
 """
 import logging
+import concurrent.futures
 from typing import TypedDict, Optional
 from modules.ai.safe_executor import safe_agent_call
 
@@ -91,18 +92,19 @@ class Orchestrator:
             # 入口
             builder.set_entry_point("safety_check")
 
-            # 条件路由：安全 Agent 判定危险 → 直接结束
+            # 条件路由：安全 Agent 判定危险 → 直接结束；安全 → fan-out 并行
             builder.add_conditional_edges(
                 "safety_check",
                 self._route_after_safety,
                 {
                     "end": END,
-                    "continue": "interaction_analyze",
+                    "interaction_analyze": "interaction_analyze",
+                    "environment_analyze": "environment_analyze",
                 }
             )
 
-            # 交互 → 环境（并行会更好，但顺序也能体现优先级）
-            builder.add_edge("interaction_analyze", "environment_analyze")
+            # 交互 + 环境 并行执行（fan-out / fan-in）
+            builder.add_edge("interaction_analyze", "merge_decision")
             builder.add_edge("environment_analyze", "merge_decision")
             builder.add_edge("merge_decision", END)
 
@@ -119,7 +121,7 @@ class Orchestrator:
 
     # ── 图节点 ──
 
-    def _node_safety(self, state: AgentState) -> AgentState:
+    def _node_safety(self, state: AgentState) -> dict:
         """安全 Agent 节点"""
         result = safe_agent_call(
             self.safety_agent, "analyze",
@@ -127,21 +129,23 @@ class Orchestrator:
             default={"risk_level": "normal", "alert": ""},
             name="safety_agent"
         )
-        state["safety_result"] = result
-        state["risk_level"] = result.get("risk_level", "normal")
-        return state
+        return {
+            "safety_result": result,
+            "risk_level": result.get("risk_level", "normal"),
+        }
 
-    def _route_after_safety(self, state: AgentState) -> str:
-        """条件路由：危险状态直接结束"""
+    def _route_after_safety(self, state: AgentState):
+        """条件路由：危险状态直接结束，安全则 fan-out 到交互+环境"""
         risk = state.get("risk_level", "normal")
         if risk in ("dangerous", "distracted"):
             state["action_code"] = "distract"
             state["recommendation_text"] = state.get("safety_result", {}).get("alert", "请注视前方")
             state["source"] = "safety_agent_priority"
             return "end"
-        return "continue"
+        # fan-out: 交互和环境 Agent 并行执行
+        return ["interaction_analyze", "environment_analyze"]
 
-    def _node_interaction(self, state: AgentState) -> AgentState:
+    def _node_interaction(self, state: AgentState) -> dict:
         """交互 Agent 节点"""
         result = safe_agent_call(
             self.interaction_agent, "analyze",
@@ -149,10 +153,9 @@ class Orchestrator:
             default={},
             name="interaction_agent"
         )
-        state["interaction_result"] = result
-        return state
+        return {"interaction_result": result}
 
-    def _node_environment(self, state: AgentState) -> AgentState:
+    def _node_environment(self, state: AgentState) -> dict:
         """环境 Agent 节点"""
         result = safe_agent_call(
             self.environment_agent, "analyze",
@@ -160,18 +163,16 @@ class Orchestrator:
             default={},
             name="environment_agent"
         )
-        state["environment_result"] = result
-        return state
+        return {"environment_result": result}
 
-    def _node_merge(self, state: AgentState) -> AgentState:
+    def _node_merge(self, state: AgentState) -> dict:
         """融合决策节点：交互结果为主，安全结果兜底"""
         interaction = state.get("interaction_result", {})
-        env = state.get("environment_result", {})
-
-        state["action_code"] = interaction.get("action_code", "unknown")
-        state["recommendation_text"] = interaction.get("recommendation_text", "")
-        state["source"] = "orchestrator"
-        return state
+        return {
+            "action_code": interaction.get("action_code", "unknown"),
+            "recommendation_text": interaction.get("recommendation_text", ""),
+            "source": "orchestrator",
+        }
 
     # ── 公共接口 ──
 
@@ -214,7 +215,7 @@ class Orchestrator:
         return self._process_sequential(initial_state)
 
     def _process_sequential(self, state: AgentState) -> dict:
-        """顺序编排（LangGraph 不可用时的降级方案）"""
+        """顺序编排（LangGraph 不可用时的降级方案）— 交互+环境并行"""
         safety = safe_agent_call(
             self.safety_agent, "analyze",
             {"gaze": state["gaze_data"], "head_pose": state["head_pose_data"]},
@@ -229,23 +230,26 @@ class Orchestrator:
                 "source": "safety_agent",
             }
 
-        interaction = safe_agent_call(
-            self.interaction_agent, "analyze",
-            {"gesture": state["gesture_data"], "speech": state["speech_data"]},
-            default={},
-            name="interaction_agent"
-        )
-
-        env = safe_agent_call(
-            self.environment_agent, "analyze", {},
-            default={},
-            name="environment_agent"
-        )
+        # 交互 + 环境 并行执行
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            fut_interaction = pool.submit(
+                safe_agent_call,
+                self.interaction_agent, "analyze",
+                {"gesture": state["gesture_data"], "speech": state["speech_data"]},
+                {}, "interaction_agent"
+            )
+            fut_env = pool.submit(
+                safe_agent_call,
+                self.environment_agent, "analyze",
+                {}, {}, "environment_agent"
+            )
+            interaction = fut_interaction.result()
+            env = fut_env.result()
 
         return {
             "action_code": interaction.get("action_code", "unknown"),
             "recommendation_text": interaction.get("recommendation_text", ""),
             "risk_level": "normal",
-            "source": "orchestrator_sequential",
+            "source": "orchestrator_parallel",
             "env_context": env,
         }

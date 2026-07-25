@@ -8,15 +8,21 @@
             }
         },
         {
-            "path": "pages/settings/settings",
+            "path": "pages/navigation/navigation",
             "style": {
-                "navigationBarTitleText": "设置"
+                "navigationBarTitleText": "导航 & 环境"
             }
         },
         {
             "path": "pages/logs/logs",
             "style": {
                 "navigationBarTitleText": "驾驶日志"
+            }
+        },
+        {
+            "path": "pages/settings/settings",
+            "style": {
+                "navigationBarTitleText": "设置"
             }
         }
     ],
@@ -38,6 +44,10 @@
             {
                 "pagePath": "pages/dashboard/dashboard",
                 "text": "驾驶"
+            },
+            {
+                "pagePath": "pages/navigation/navigation",
+                "text": "导航"
             },
             {
                 "pagePath": "pages/logs/logs",

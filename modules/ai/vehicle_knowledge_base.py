@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 车辆知识库 — FAISS 向量检索 + RAG 问答
 ==========================================
@@ -19,7 +21,6 @@ B岗核心模块：负责车辆说明书、故障码、车载功能文档的语�
 """
 
 import os
-from __future__ import annotations
 import logging
 import pickle
 from typing import Optional
@@ -240,46 +241,63 @@ class VehicleKnowledgeBase:
     def _init_embedding(self):
         """
         初始化 embedding 函数。
-        优先使用 DeepSeek/豆包 API embedding，不可用时降级到本地 sentence-transformers。
+        优先使用本地 sentence-transformers（更稳定），
+        不可用时降级到远程 API embedding。
         """
         if self.embedding_fn is not None:
             return
 
-        # 尝试方法1：使用 OpenAI 兼容的 embedding（DeepSeek/豆包）
+        # 尝试方法1：本地 sentence-transformers（优先，更稳定且无网络依赖）
         try:
-            from modules.ai.deepseek_client import deepseek_client
-            # DeepSeek API 使用 openai 兼容接口
-            client = deepseek_client.client
+            # 国内网络环境优先使用 HuggingFace 镜像站下载模型
+            hf_endpoint = os.getenv("HF_ENDPOINT", "https://hf-mirror.com")
+            os.environ.setdefault("HF_ENDPOINT", hf_endpoint)
 
-            def _remote_embed(texts: list[str]):
-                resp = client.embeddings.create(
-                    model="deepseek-embedding",  # DeepSeek 向量模型；豆包可改为对应 embedding 模型
-                    input=texts,
-                )
-                import numpy as np
-                return np.array([d.embedding for d in resp.data], dtype=np.float32)
-
-            self.embedding_fn = _remote_embed
-            logger.info("使用远程 Embedding API")
-            return
-        except Exception as e:
-            logger.warning(f"远程 Embedding 不可用: {e}，尝试本地模型")
-
-        # 尝试方法2：本地 sentence-transformers
-        try:
             from sentence_transformers import SentenceTransformer
-            model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+            model = SentenceTransformer(
+                "paraphrase-multilingual-MiniLM-L12-v2",
+                device="cpu",  # 车载/本地环境使用 CPU 推理
+            )
 
             def _local_embed(texts: list[str]):
                 return model.encode(texts, convert_to_numpy=True).astype("float32")
 
             self.embedding_fn = _local_embed
-            logger.info("使用本地 SentenceTransformer Embedding")
+            logger.info(f"使用本地 SentenceTransformer Embedding (HF mirror: {hf_endpoint})")
             return
         except Exception as e:
-            logger.warning(f"本地 Embedding 不可用: {e}")
+            logger.warning(f"本地 Embedding 不可用: {e}，尝试远程 API")
 
-        # 方法3：最终降级 - TF-IDF 伪向量（不支持 FAISS，降级到关键词）
+        # 尝试方法2：使用 OpenAI 兼容的 embedding API
+        # NOTE: DeepSeek API 不支持 embeddings 接口，因此单独配置 embedding 提供商
+        try:
+            from openai import OpenAI
+            import numpy as np
+
+            embedding_api_key = os.getenv("EMBEDDING_API_KEY") or os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY", "")
+            embedding_api_base = os.getenv("EMBEDDING_API_BASE", "https://api.openai.com/v1")
+            embedding_model = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+
+            emb_client = OpenAI(
+                api_key=embedding_api_key,
+                base_url=embedding_api_base,
+                timeout=30.0,
+            )
+
+            def _remote_embed(texts: list[str]):
+                resp = emb_client.embeddings.create(
+                    model=embedding_model,
+                    input=texts,
+                )
+                return np.array([d.embedding for d in resp.data], dtype=np.float32)
+
+            self.embedding_fn = _remote_embed
+            logger.info(f"使用远程 Embedding API ({embedding_api_base}, model={embedding_model})")
+            return
+        except Exception as e:
+            logger.warning(f"远程 Embedding 不可用: {e}")
+
+        # 方法3：最终降级 - 无向量，依赖关键词匹配
         self.embedding_fn = None
         logger.warning("无可用的 Embedding 方案，依赖关键词匹配")
 
