@@ -26,6 +26,8 @@
     }
 """
 import logging
+import math
+import os
 import time
 from typing import Optional
 
@@ -34,6 +36,8 @@ logger = logging.getLogger(__name__)
 # 免费公开 API（无需 key）
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OSRM_URL = "https://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
+AMAP_GEOCODE_URL = "https://restapi.amap.com/v3/geocode/geo"
+AMAP_DRIVING_URL = "https://restapi.amap.com/v3/direction/driving"
 
 # 地球半径（km），用于直线距离估算
 _EARTH_R = 6371.0
@@ -116,7 +120,15 @@ class NavigationService:
             if now - ts < self._cache_ttl:
                 return cached
 
-        # 1. 地理编码目的地
+        # 1. Prefer AMap driving route when configured.
+        amap_key = os.getenv("AMAP_API_KEY", "")
+        if amap_key and from_lat is not None and from_lon is not None:
+            amap_result = self._plan_amap(from_lat, from_lon, destination, amap_key)
+            if amap_result.get("success"):
+                self._cache[cache_key] = (amap_result, now)
+                return amap_result
+
+        # 2. Geocode destination for the OSRM/free fallback path.
         dst_coords = self._geocode(destination)
         if dst_coords is None:
             return self._fail(f"无法定位目的地「{destination}」")
@@ -173,6 +185,90 @@ class NavigationService:
         return result
 
     # ── 内部 ──
+
+    def _plan_amap(self, from_lat: float, from_lon: float, destination: str, amap_key: str) -> dict:
+        """Plan a driving route with AMap and return map-ready GCJ-02 geometry."""
+        try:
+            import httpx
+
+            dst = self._geocode_amap(destination, amap_key)
+            if dst is None:
+                return {"success": False, "source": "amap", "error": "AMap geocode not found"}
+            dst_lat, dst_lon, formatted = dst
+            origin_lat, origin_lon = _wgs84_to_gcj02(from_lat, from_lon)
+
+            resp = httpx.get(
+                AMAP_DRIVING_URL,
+                params={
+                    "origin": f"{origin_lon},{origin_lat}",
+                    "destination": f"{dst_lon},{dst_lat}",
+                    "strategy": 0,
+                    "extensions": "all",
+                    "key": amap_key,
+                },
+                timeout=8.0,
+            )
+            data = resp.json()
+            route = data.get("route", {}) if data.get("status") == "1" else {}
+            paths = route.get("paths") or []
+            if not paths:
+                return {"success": False, "source": "amap", "error": data.get("info", "AMap route not found")}
+
+            path = paths[0]
+            geometry = []
+            instructions = []
+            for step in path.get("steps", []) or []:
+                instruction = (step.get("instruction") or "").strip()
+                if instruction:
+                    instructions.append(instruction)
+                for point in (step.get("polyline") or "").split(";"):
+                    if not point or "," not in point:
+                        continue
+                    lng, lat = point.split(",", 1)
+                    geometry.append([float(lat), float(lng)])
+
+            distance_km = round(float(path.get("distance") or 0) / 1000, 1)
+            duration_min = round(float(path.get("duration") or 0) / 60, 1)
+            return {
+                "success": True,
+                "destination": destination,
+                "origin": "当前位置",
+                "origin_coords": [origin_lat, origin_lon],
+                "destination_coords": [dst_lat, dst_lon],
+                "distance_km": distance_km,
+                "duration_min": duration_min,
+                "steps": instructions[:8],
+                "geometry": geometry,
+                "coordinate_system": "gcj02",
+                "route_summary": f"到「{destination}」约 {distance_km:.0f} 公里，预计 {duration_min:.0f} 分钟",
+                "source": "amap",
+            }
+        except Exception as e:
+            logger.warning("AMap route planning failed: %s", e)
+            return {"success": False, "source": "amap", "error": str(e)}
+
+    def _geocode_amap(self, name: str, amap_key: str):
+        """Geocode with AMap. Coordinates returned by AMap are GCJ-02."""
+        try:
+            import httpx
+
+            resp = httpx.get(
+                AMAP_GEOCODE_URL,
+                params={"address": name, "key": amap_key},
+                timeout=5.0,
+            )
+            data = resp.json()
+            if data.get("status") != "1" or not data.get("geocodes"):
+                return None
+            geocode = data["geocodes"][0]
+            location = geocode.get("location", "")
+            if "," not in location:
+                return None
+            lng, lat = location.split(",", 1)
+            return float(lat), float(lng), geocode.get("formatted_address", name)
+        except Exception as e:
+            logger.debug("AMap geocode failed: %s", e)
+            return None
 
     def _geocode(self, name: str):
         """地理编码：Nominatim 在线查询 → 离线地标表兜底"""
@@ -259,14 +355,52 @@ class NavigationService:
         return {
             "success": False,
             "destination": "",
+            "origin_coords": None,
             "destination_coords": None,
             "distance_km": 0,
             "duration_min": 0,
             "steps": [],
             "geometry": [],
+            "coordinate_system": "wgs84",
             "route_summary": msg,
             "source": "error",
         }
+
+
+def _out_of_china(lat: float, lon: float) -> bool:
+    return lon < 72.004 or lon > 137.8347 or lat < 0.8293 or lat > 55.8271
+
+
+def _transform_lat(x: float, y: float) -> float:
+    ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * math.sqrt(abs(x))
+    ret += (20.0 * math.sin(6.0 * x * math.pi) + 20.0 * math.sin(2.0 * x * math.pi)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(y * math.pi) + 40.0 * math.sin(y / 3.0 * math.pi)) * 2.0 / 3.0
+    ret += (160.0 * math.sin(y / 12.0 * math.pi) + 320 * math.sin(y * math.pi / 30.0)) * 2.0 / 3.0
+    return ret
+
+
+def _transform_lon(x: float, y: float) -> float:
+    ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * math.sqrt(abs(x))
+    ret += (20.0 * math.sin(6.0 * x * math.pi) + 20.0 * math.sin(2.0 * x * math.pi)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(x * math.pi) + 40.0 * math.sin(x / 3.0 * math.pi)) * 2.0 / 3.0
+    ret += (150.0 * math.sin(x / 12.0 * math.pi) + 300.0 * math.sin(x / 30.0 * math.pi)) * 2.0 / 3.0
+    return ret
+
+
+def _wgs84_to_gcj02(lat: float, lon: float) -> tuple[float, float]:
+    if _out_of_china(lat, lon):
+        return lat, lon
+    a = 6378245.0
+    ee = 0.00669342162296594323
+    dlat = _transform_lat(lon - 105.0, lat - 35.0)
+    dlon = _transform_lon(lon - 105.0, lat - 35.0)
+    radlat = lat / 180.0 * math.pi
+    magic = math.sin(radlat)
+    magic = 1 - ee * magic * magic
+    sqrt_magic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrt_magic) * math.pi)
+    dlon = (dlon * 180.0) / (a / sqrt_magic * math.cos(radlat) * math.pi)
+    return lat + dlat, lon + dlon
 
 
 # 全局单例

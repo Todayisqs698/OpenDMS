@@ -34,7 +34,7 @@ Intention Agent — 意图识别与调度计划生成
 import json
 import logging
 import re
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,8 @@ class IntentItem:
     priority: int     # 优先级 0-9
     description: str  # 意图描述
     params: dict = field(default_factory=dict)  # 提取的参数
+    confidence: float = 0.0  # 规则/LLM 对该意图的置信度
+    metadata: dict = field(default_factory=dict)  # 诊断信息：命中规则、路由原因等
 
 
 @dataclass
@@ -73,6 +75,10 @@ class IntentionPlan:
                     "priority": i.priority,
                     "description": i.description,
                     "params": i.params,
+                    "confidence": i.confidence,
+                    "mode": i.metadata.get("mode", i.metadata.get("decision_mode", "EXECUTE")),
+                    "missing_slots": i.metadata.get("missing_slots", []),
+                    "metadata": i.metadata,
                 }
                 for i in self.intents
             ],
@@ -126,6 +132,15 @@ RULE_BASED_PATTERNS = {
         "agent": "diagnose_agent",
         "priority": 2,
     },
+    "context_query": {
+        "patterns": [
+            r"刚才.*导航|上次.*导航|刚刚.*导航|之前.*导航",
+            r"刚才.*去哪|上次.*去哪|刚.*去了哪",
+            r"刚才.*那个|上次.*那个|刚才.*什么|上次.*什么",
+        ],
+        "agent": "react_agent",
+        "priority": 2,
+    },
     "weather": {
         "patterns": [
             r"天气|下雨|温度.*几度|气温|几度",
@@ -141,12 +156,30 @@ RULE_BASED_PATTERNS = {
         "agent": "recommend_agent",
         "priority": 3,
     },
+    "location_management": {
+        "patterns": [
+            r"我家在|我家住在|家地址是|家地址在",
+            r"公司地址是|公司地址在|单位地址",
+            r"记住.*地址|保存.*地址|设.*家.*地址|设.*公司.*地址",
+            r"家在哪|家.*哪里|你.*定义.*家|公司的地址.*什么|公司.*在哪",
+        ],
+        "agent": "react_agent",
+        "priority": 3,
+    },
     "navigation": {
         "patterns": [
             r"导航|路线|怎么走|去.*哪|到.*去",
         ],
         "agent": "recommend_agent",
         "priority": 4,
+    },
+    "attractions": {
+        "patterns": [
+            r"景点|餐厅|饭店|店铺|美食|火锅|牦牛肉|小吃|推荐.*店|有什么推荐",
+            r"在哪里|地址|人均|评分|多少钱|价格|营业|电话|怎么样",
+        ],
+        "agent": "recommend_agent",
+        "priority": 6,
     },
 }
 
@@ -161,11 +194,13 @@ def rule_based_intent_detection(text: str) -> List[IntentItem]:
 
     for category, config in RULE_BASED_PATTERNS.items():
         matched = False
+        matched_patterns = []
         extracted_params = {}
 
         for pattern in config["patterns"]:
             if re.search(pattern, text):
                 matched = True
+                matched_patterns.append(pattern)
                 # 提取简单参数
                 if category == "ac_control":
                     temp_match = re.search(r"(\d{1,2})\s*(度|°|℃)", text)
@@ -179,13 +214,43 @@ def rule_based_intent_detection(text: str) -> List[IntentItem]:
                     singer_match = re.search(r"(周杰伦|王菲|林俊杰|陈奕迅|邓紫棋|薛之谦)", text)
                     if singer_match:
                         extracted_params["singer"] = singer_match.group(1)
-                    if re.search(r"播放|放|来|听", text):
-                        extracted_params["action"] = "play"
-                    elif re.search(r"暂停|停止|停", text):
+                    # 先检查暂停/停止（"停止播放"包含"播放"但应识别为暂停）
+                    if re.search(r"暂停|停止|停播|停掉|别放|关掉音乐|关音乐|停止播放", text):
                         extracted_params["action"] = "pause"
+                    elif re.search(r"播放|放|来|听", text):
+                        extracted_params["action"] = "play"
+                elif category == "location_management":
+                    # 区分保存 vs 查询
+                    if re.search(r"家在哪|家.*哪里|你.*定义.*家|公司的地址.*什么|公司.*在哪", text):
+                        extracted_params["action"] = "query"
+                    else:
+                        extracted_params["action"] = "save"
+                    # 提取标签
+                    if re.search(r"公司|单位", text):
+                        extracted_params["label"] = "company"
+                    else:
+                        extracted_params["label"] = "home"
+                    # 提取地址（我家在XXX / 公司地址是XXX）
+                    addr_match = re.search(r"(?:我家住在?|家地址[是在]|公司地址[是在]|单位地址[是在])(.+)", text)
+                    if addr_match:
+                        extracted_params["address"] = addr_match.group(1).strip()
+                elif category == "navigation":
+                    # Skip context queries like "刚才导航去哪了" (route to react_agent instead)
+                    if re.search(r"刚才|上次|刚刚|之前", text):
+                        matched = False
+                        break
+                    # Extract destination from common patterns
+                    nav_match = re.search(r"(?:导航|带我|帮我)(?:到|去|回)([^，。！？?]+)", text)
+                    if nav_match:
+                        dest = nav_match.group(1).strip()
+                        if dest and not re.search(r"^(哪里|哪儿|哪|一下|吗|么|不|别|取消)$", dest):
+                            extracted_params["destination"] = dest
+                    elif re.search(r"^(回家|回公司|导航回家|导航回公司)$", text):
+                        extracted_params["destination"] = "家" if "回家" in text else "公司"
                 break
 
         if matched:
+            confidence = _score_rule_match(category, text, extracted_params, matched_patterns)
             intent_id += 1
             detected.append(IntentItem(
                 id=f"intent_{intent_id}",
@@ -194,11 +259,91 @@ def rule_based_intent_detection(text: str) -> List[IntentItem]:
                 priority=config["priority"],
                 description=_generate_description(category, extracted_params, text),
                 params=extracted_params,
+                confidence=confidence,
+                metadata={
+                    "source": "rule",
+                    "matched_patterns": matched_patterns,
+                    "param_completeness": _param_completeness(category, extracted_params),
+                },
             ))
 
     # 按优先级排序（数字越小越先）
     detected.sort(key=lambda x: x.priority)
     return detected
+
+
+def _rule_intent_is_actionable(category: str, params: dict, confidence: float) -> bool:
+    """Whether a rule hit is strong enough to execute without semantic confirmation."""
+    if category == "navigation":
+        return bool(params.get("destination")) and confidence >= 0.72
+    if category == "music_control":
+        return bool(params.get("action") or params.get("singer")) and confidence >= 0.78
+    if category == "ac_control":
+        return bool(params.get("action") or "temperature" in params) and confidence >= 0.78
+    if category == "location_management":
+        if params.get("action") == "query":
+            return confidence >= 0.78
+        return bool(params.get("address")) and confidence >= 0.78
+    if category in {"weather", "attractions", "trip_plan", "diagnosis"}:
+        return confidence >= 0.85
+    return confidence >= 0.8
+
+
+def _param_completeness(category: str, params: dict) -> float:
+    """衡量规则提取出的关键参数是否足够执行。"""
+    if category == "ac_control":
+        return 1.0 if params.get("action") or "temperature" in params else 0.55
+    if category == "music_control":
+        return 1.0 if params.get("action") or params.get("singer") else 0.55
+    if category == "weather":
+        return 0.75 if params.get("city") else 0.65
+    if category == "location_management":
+        if params.get("action") == "query":
+            return 1.0
+        return 1.0 if params.get("address") else 0.7
+    if category == "navigation":
+        return 1.0 if params.get("destination") else 0.55
+    if category == "trip_plan":
+        return 0.55
+    return 0.8
+
+
+def _score_rule_match(category: str, text: str, params: dict, matched_patterns: list) -> float:
+    """
+    给规则命中的意图一个轻量置信度。
+    置信度不是模型概率，只用于决定是否跳过 LLM。
+    """
+    score = 0.45
+    score += min(len(matched_patterns), 3) * 0.15
+    score += _param_completeness(category, params) * 0.25
+
+    explicit_control = {
+        "ac_control": r"(打开|开启|启动|关闭|关掉|调到|设到|设置).*(空调|温度)|空调.*(打开|开启|关闭|关掉)|\d{1,2}\s*(度|°|℃)",
+        "music_control": r"(播放|放|来首|听|暂停|停止|下一首|上一首|切歌|音量).*(音乐|歌|歌曲|周杰伦|王菲|林俊杰|陈奕迅|邓紫棋|薛之谦)|^(播放|暂停|下一首|上一首|切歌)",
+        "weather": r"(查|看|看看|问).*(天气|气温)|天气.*(怎么样|如何)",
+        "location_management": r"(我家在|我家住在|家地址|公司地址|单位地址|记住.*地址|保存.*地址|家在哪|你.*定义.*家)",
+        "context_query": r"(刚才|上次|刚刚|之前).*(导航|去哪|那个|什么)",
+    }
+    if re.search(explicit_control.get(category, r"$^"), text):
+        score += 0.15
+
+    # 单个宽泛词命中更像弱匹配，例如"有问题吗"可能是闲聊，也可能是诊断。
+    weak_categories = {"diagnosis", "navigation", "trip_plan"}
+    if category in weak_categories and not params:
+        score -= 0.15
+
+    # 这些类别通常需要 LLM/RAG 做槽位提取，但如果关键参数已提取（如导航目的地），
+    # 可以跳过 LLM 直接执行。
+    if category in weak_categories:
+        has_key_param = (
+            (category == "navigation" and params.get("destination")) or
+            (category == "trip_plan" and params.get("city")) or
+            (category == "diagnosis" and params.get("query"))
+        )
+        if not has_key_param:
+            score = min(score, 0.70)
+
+    return round(max(0.0, min(score, 0.99)), 2)
 
 
 def _generate_description(category: str, params: dict, text: str) -> str:
@@ -223,8 +368,18 @@ def _generate_description(category: str, params: dict, text: str) -> str:
         return "疲劳辅助：需要提神"
     if category == "diagnosis":
         return "故障诊断"
+    if category == "context_query":
+        return "上下文查询"
     if category == "weather":
         return "天气查询"
+    if category == "location_management":
+        if params.get("action") == "query":
+            label = "家" if params.get("label") == "home" else "公司"
+            return f"查询{label}的地址"
+        label = "家" if params.get("label") == "home" else "公司"
+        if params.get("address"):
+            return f"保存{label}的地址"
+        return f"设置{label}地址"
     if category == "navigation":
         return "导航查询"
     return category
@@ -249,6 +404,8 @@ INTENT_DECOMPOSE_PROMPT = """\
 | navigation | recommend_agent | 导航/路线规划 |
 | trip_plan | recommend_agent | 行程规划（一日游/多日游/旅游攻略） |
 | attractions | recommend_agent | 景点/餐厅推荐 |
+| location_management | react_agent | 保存/查询常用地点（我家在XX、家在哪、公司地址是XX） |
+| context_query | react_agent | 上下文查询（刚才导航去哪了、上次那个、刚才什么） |
 | chitchat | react_agent | 闲聊/问答 |
 
 ## 规则
@@ -263,8 +420,20 @@ INTENT_DECOMPOSE_PROMPT = """\
 7. **必须从用户原话中提取关键参数填入 params**：
    - navigation 类别 → params: {{"destination": "提取的地名（去掉导航/帮/到/去等前缀词）"}}
    - weather 类别 → params: {{"city": "提取的城市名"}}
+   - trip_plan 类别 → params: {{"city": "目的地城市（如'从天津到新疆'→目的地是新疆）", "days": 数字, "preference": "游玩偏好"}}
+   - attractions 类别 → params: {{"city": "城市名"}}
    - music_control 类别 → params: {{"singer": "提取的歌手名", "action": "play/pause"}}
    - ac_control 类别 → params: {{"action": "TurnOnAC/TurnOffAC", "temperature": 温度数字}}
+   - location_management 类别 → params: {{"action": "save/query", "label": "home/company", "address": "提取的地址（仅save时）"}}
+8. **'从X到Y'/'X出发去Y'格式** → 目的地是Y，not X。例如'从天津到新疆'→ city=新疆。
+9. **多轮对话上下文复用**：如果"上次对话上下文"中包含上次行程参数（城市、天数、偏好），
+   且用户当前输入是对上次行程的调整/细化（如"我对新城不感兴趣"、"换个方案"、"提高舒适度"、
+   "多安排美食"、"不想去XX"等），必须复用上次的城市和天数，不要设置 needs_clarification=true。
+   将调整诉求填入 params.preference 或 params，保持 city/days 沿用上次的值。
+   只有当用户明确开启全新行程（如"规划北京三日游"）时才重新提取参数。
+
+## 上次对话上下文：
+{conversation_context}
 
 ## 当前驾驶员状态：
 - 视线方向: {gaze}
@@ -313,13 +482,16 @@ class IntentionAgent:
             self._client = deepseek_client
         return self._client
 
-    def analyze(self, text: str, driver_state: dict = None) -> IntentionPlan:
+    def analyze(self, text: str, driver_state: dict = None,
+                conversation_context: str = "") -> IntentionPlan:
         """
         分析用户输入，返回意图调度计划。
 
         Args:
             text: 用户语音/文本输入
             driver_state: 驾驶员状态（用于上下文）
+            conversation_context: 上轮对话的结构化上下文（如上次行程参数），
+                                  帮助 LLM 在多轮调整场景下复用 city/days 而非重新询问。
         """
         if not text or not text.strip():
             return IntentionPlan(overall_summary="空输入")
@@ -332,8 +504,12 @@ class IntentionAgent:
         # ── Step 1: 规则快速匹配
         rule_intents = rule_based_intent_detection(text)
 
-        # 简单情况（1-2个明确意图，直接用规则结果 + 补充描述
-        if len(rule_intents) >= 1 and not self._needs_llm(text, rule_intents):
+        needs_llm, llm_reason = self._needs_llm(text, rule_intents)
+
+        # 简单情况（高置信规则意图，直接用规则结果 + 补充描述）
+        if len(rule_intents) >= 1 and not needs_llm:
+            for intent in rule_intents:
+                intent.metadata["llm_skipped_reason"] = llm_reason
             summary = self._build_summary(rule_intents)
             return IntentionPlan(
                 intents=rule_intents,
@@ -342,13 +518,45 @@ class IntentionAgent:
 
         # ── Step 2: 复杂情况 → LLM 分解
         try:
-            return self._llm_decompose(text, gaze, fatigue_level, safety_level)
+            return self._llm_decompose(text, gaze, fatigue_level, safety_level,
+                                       conversation_context=conversation_context)
         except Exception as e:
             logger.warning(f"LLM 意图分解失败: {e}，使用规则结果兜底")
             if rule_intents:
+                actionable_intents = [
+                    intent for intent in rule_intents
+                    if _rule_intent_is_actionable(intent.category, intent.params, intent.confidence)
+                ]
+                if not actionable_intents:
+                    return IntentionPlan(
+                        intents=[IntentItem(
+                            id="intent_1",
+                            category="chitchat",
+                            agent="react_agent",
+                            priority=9,
+                            description=text[:30],
+                            params={"text": text},
+                            confidence=0.35,
+                            metadata={
+                                "source": "fallback_guard",
+                                "llm_error": str(e)[:120],
+                                "suppressed_rule_intents": [
+                                    {
+                                        "category": i.category,
+                                        "confidence": i.confidence,
+                                        "params": i.params,
+                                    }
+                                    for i in rule_intents
+                                ],
+                            },
+                        )],
+                        overall_summary=text[:30],
+                    )
+                for intent in actionable_intents:
+                    intent.metadata["llm_fallback_reason"] = str(e)[:120]
                 return IntentionPlan(
-                    intents=rule_intents,
-                    overall_summary=self._build_summary(rule_intents),
+                    intents=actionable_intents,
+                    overall_summary=self._build_summary(actionable_intents),
                 )
             return IntentionPlan(
                 intents=[IntentItem(
@@ -358,50 +566,64 @@ class IntentionAgent:
                     priority=9,
                     description=text[:30],
                     params={"text": text},
+                    confidence=0.4,
+                    metadata={"source": "fallback", "llm_error": str(e)[:120]},
                 )],
                 overall_summary=text[:30],
             )
 
-    def _needs_llm(self, text: str, rule_intents: List[IntentItem]) -> bool:
-        """判断是否需要 LLM 分解/编排。"""
+    def _needs_llm(self, text: str, rule_intents: List[IntentItem]) -> Tuple[bool, str]:
+        """判断是否需要 LLM 分解/编排，并返回可观测原因。"""
         categories = [i.category for i in rule_intents]
+
+        if not categories:
+            return True, "no_rule_match"
+
+        min_confidence = min(i.confidence for i in rule_intents)
+        if min_confidence < 0.72:
+            return True, f"low_rule_confidence:{min_confidence:.2f}"
 
         # 多个意图（≥2）→ 需要 LLM 统一编排，避免碎片化响应
         if len(categories) >= 2:
-            return True
+            return True, "multiple_rule_intents"
 
         # 疲劳 + 控制类复合意图 → 需要 ReAct Agent 统一编排
         has_fatigue = "fatigue_assist" in categories
         has_control = any(c in categories for c in ["ac_control", "music_control"])
         if has_fatigue and has_control:
-            return True  # 疲劳+控制 → 需要组合编排
+            return True, "fatigue_control_combo"
 
         # 有诊断类意图 → 需要 RAG + LLM
         if "diagnosis" in categories:
-            return True
+            return True, "diagnosis_needs_reasoning"
 
-        # 导航类 → 需要 LLM 提取目的地等关键参数
+        # 导航类 → 如果目的地已提取（如"导航回家"），跳过 LLM；否则需要 LLM 提取
         if "navigation" in categories:
-            return True
+            nav_intent = next((i for i in rule_intents if i.category == "navigation"), None)
+            if nav_intent and nav_intent.params.get("destination"):
+                return False, "navigation_dest_extracted"
+            return True, "navigation_needs_slot_filling"
 
         # 模糊表达（不是明确指令词）→ 需要 LLM
         vague_words = ["有点", "好像", "感觉", "不知道", "怎么办", "为什么"]
         if any(w in text for w in vague_words):
-            return True
+            return True, "vague_expression"
 
         # 疑问句式
         if "？" in text or "?" in text:
-            return True
+            return True, "question_form"
 
-        return False
+        return False, "high_confidence_rule"
 
-    def _llm_decompose(self, text: str, gaze: str, fatigue: str, safety: str) -> IntentionPlan:
+    def _llm_decompose(self, text: str, gaze: str, fatigue: str, safety: str,
+                       conversation_context: str = "") -> IntentionPlan:
         """使用 LLM 进行意图分解。"""
         prompt = INTENT_DECOMPOSE_PROMPT.format(
             user_text=text,
             gaze=gaze,
             fatigue_level=fatigue,
             safety_level=safety,
+            conversation_context=conversation_context or "（无上轮对话上下文）",
         )
 
         response = self.client.client.chat.completions.create(
@@ -442,6 +664,8 @@ class IntentionAgent:
                 priority=item.get("priority", 5),
                 description=item.get("description", ""),
                 params=item.get("params", {}),
+                confidence=float(item.get("confidence", 0.85)),
+                metadata={"source": "llm"},
             ))
 
         # 按优先级排序

@@ -1,7 +1,7 @@
 <template>
-  <div class="relative h-full overflow-hidden rounded-2xl border border-border bg-card">
+  <div class="relative h-full min-h-[300px] overflow-hidden rounded-2xl border border-border bg-card">
     <!-- Leaflet map container -->
-    <div ref="mapContainer" class="absolute inset-0 h-full w-full" />
+    <div ref="mapContainer" class="absolute inset-0 h-full w-full" style="z-index:0" />
 
     <!-- Top nav info bar -->
     <div class="absolute inset-x-3 top-3 z-[1000] flex items-center justify-between gap-3 rounded-xl bg-card/85 px-4 py-2.5 backdrop-blur-md">
@@ -128,6 +128,10 @@ const cameraCanvas = ref<HTMLCanvasElement | null>(null)
 const mapContainer = ref<HTMLDivElement | null>(null)
 let mapInstance: L.Map | null = null
 let currentMarker: L.Marker | null = null
+let routeLayer: L.Polyline | null = null
+let originMarker: L.Marker | null = null
+let destinationMarker: L.Marker | null = null
+let geocodeRequestSeq = 0
 
 // ── Leaflet map init ──
 function initMap() {
@@ -140,34 +144,130 @@ function initMap() {
     attributionControl: false,
   })
 
-  // Light tile layer (OpenStreetMap — free, no key)
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19,
-    attribution: '&copy; OpenStreetMap contributors',
-  }).addTo(mapInstance)
+  // 高德地图瓦片（国内可访问，无需翻墙）
+  L.tileLayer(
+    'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+    {
+      subdomains: ['1', '2', '3', '4'],
+      maxZoom: 19,
+      attribution: '&copy; 高德地图',
+    },
+  ).addTo(mapInstance)
 }
 
 // ── Navigation functions ──
+function flyTo(lat: number, lng: number, zoom = 16, label = '当前位置') {
+  if (!mapInstance) return
+  clearRoute()
+  mapInstance.setView([lat, lng], zoom)
+  if (currentMarker) currentMarker.remove()
+  currentMarker = L.marker([lat, lng]).addTo(mapInstance).bindPopup(label).openPopup()
+}
+
+function reportLocation(lat: number, lng: number) {
+  const body = JSON.stringify({ lat, lon: lng })
+  fetch('/api/location', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  }).catch(() => {})
+
+  const params = new URLSearchParams({ lat: String(lat), lon: String(lng) })
+  fetch(`/api/gps/update?${params.toString()}`, { method: 'POST' }).catch(() => {})
+}
+
+function clearRoute() {
+  routeLayer?.remove()
+  originMarker?.remove()
+  destinationMarker?.remove()
+  routeLayer = null
+  originMarker = null
+  destinationMarker = null
+}
+
+function setRouteMarker(coords: [number, number], label: string, role: 'origin' | 'destination') {
+  if (!mapInstance) return null
+  const marker = L.circleMarker(coords, {
+    radius: role === 'origin' ? 7 : 8,
+    color: role === 'origin' ? '#22c55e' : '#38bdf8',
+    fillColor: role === 'origin' ? '#22c55e' : '#38bdf8',
+    fillOpacity: 1,
+    weight: 3,
+  }).addTo(mapInstance).bindPopup(label)
+  return marker
+}
+
+function renderRoute() {
+  if (!mapInstance) return false
+  const geometry = props.nav.geometry?.filter(
+    (point): point is [number, number] =>
+      Array.isArray(point) &&
+      point.length === 2 &&
+      Number.isFinite(point[0]) &&
+      Number.isFinite(point[1]),
+  ) || []
+  const origin = props.nav.originCoords
+  const destination = props.nav.destinationCoords
+
+  if (geometry.length < 2 && !destination) return false
+
+  clearRoute()
+  if (currentMarker) {
+    currentMarker.remove()
+    currentMarker = null
+  }
+
+  if (geometry.length >= 2) {
+    routeLayer = L.polyline(geometry, {
+      color: '#0ea5e9',
+      weight: 7,
+      opacity: 0.9,
+      lineCap: 'round',
+      lineJoin: 'round',
+    }).addTo(mapInstance)
+  }
+
+  if (origin) originMarker = setRouteMarker(origin, '起点', 'origin')
+  if (destination) destinationMarker = setRouteMarker(destination, props.nav.destination || '目的地', 'destination')
+
+  const boundsPoints = [
+    ...(routeLayer ? routeLayer.getLatLngs() as L.LatLng[] : []),
+    ...(origin ? [L.latLng(origin[0], origin[1])] : []),
+    ...(destination ? [L.latLng(destination[0], destination[1])] : []),
+  ]
+  if (boundsPoints.length > 0) {
+    mapInstance.fitBounds(L.latLngBounds(boundsPoints), { padding: [56, 56], maxZoom: 15 })
+  }
+  destinationMarker?.openPopup()
+  return true
+}
+
 function locateMe() {
   if (!mapInstance) return
-  if ('geolocation' in navigator) {
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude } = pos.coords
-        mapInstance!.setView([latitude, longitude], 16)
-        if (currentMarker) currentMarker.remove()
-        currentMarker = L.marker([latitude, longitude])
-          .addTo(mapInstance!)
-          .bindPopup('当前位置')
-          .openPopup()
-      },
-      () => {
-        // Fallback to Shanghai
-        mapInstance!.setView([31.2304, 121.4737], 14)
-      },
-      { enableHighAccuracy: true, timeout: 5000 },
-    )
+  if (!('geolocation' in navigator)) {
+    flyTo(31.2304, 121.4737, 14)  // 无 GPS → 上海默认
+    return
   }
+  // 两级降级：高精度 8s → 低精度 15s → 上海默认
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const { latitude, longitude } = pos.coords
+      reportLocation(latitude, longitude)
+      flyTo(latitude, longitude)
+    },
+    () => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const { latitude, longitude } = pos.coords
+          reportLocation(latitude, longitude)
+          flyTo(latitude, longitude)
+        },
+        () => { flyTo(31.2304, 121.4737, 14) },
+        { enableHighAccuracy: false, timeout: 15000 },
+      )
+    },
+    { enableHighAccuracy: true, timeout: 8000 },
+  )
 }
 
 function zoomIn() { mapInstance?.zoomIn() }
@@ -176,23 +276,30 @@ function zoomOut() { mapInstance?.zoomOut() }
 // Watch nav destination changes to fly to location
 watch(() => props.nav.destination, async (dest) => {
   if (!dest || !mapInstance) return
-  // Geocode destination with Nominatim
+  if (renderRoute()) return
+  const seq = ++geocodeRequestSeq
+  // 通过后端代理调用高德地理编码（避免暴露 API Key）
   try {
-    const resp = await fetch(
-      `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(dest)}&limit=1`
-    )
+    const resp = await fetch(`/api/map/geocode?address=${encodeURIComponent(dest)}`)
     const data = await resp.json()
-    if (data[0]) {
-      const { lat, lon } = data[0]
-      mapInstance!.setView([parseFloat(lat), parseFloat(lon)], 14)
+    if (seq !== geocodeRequestSeq) return
+    if (data.success && data.lat != null && data.lng != null) {
+      clearRoute()
+      mapInstance!.setView([data.lat, data.lng], 14)
       if (currentMarker) currentMarker.remove()
-      currentMarker = L.marker([parseFloat(lat), parseFloat(lon)])
+      currentMarker = L.marker([data.lat, data.lng])
         .addTo(mapInstance!)
-        .bindPopup(dest)
+        .bindPopup(data.formatted || dest)
         .openPopup()
     }
   } catch { /* geocode failed */ }
 })
+
+watch(
+  () => [props.nav.geometry, props.nav.originCoords, props.nav.destinationCoords, props.nav.destination],
+  () => { renderRoute() },
+  { deep: true },
+)
 
 // ── Camera frame rendering ──
 let camTimer: ReturnType<typeof setInterval> | undefined
@@ -239,6 +346,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (camTimer) clearInterval(camTimer)
+  clearRoute()
   if (mapInstance) { mapInstance.remove(); mapInstance = null }
 })
 </script>

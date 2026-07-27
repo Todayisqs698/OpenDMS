@@ -94,7 +94,22 @@ export const safetyGateMap: Record<SafetyLevel, SafetyGateState> = {
 export interface Telemetry { attention: number; fatigue: number; gazeOnRoad: number; blinkRate: number; level: SafetyLevel }
 export interface SafetyAlert { id: string; level: SafetyLevel; title: string; detail: string; time: string }
 export interface DrivingStats { durationMin: number; distractionCount: number; perclosAvg: number; fatigueTrend: number[]; score: number }
-export interface NavInfo { destination: string; etaMin: number; distanceKm: number; nextTurn: string; nextTurnMeters: number; speed: number; speedLimit: number }
+export type LatLngTuple = [number, number]
+export interface NavInfo {
+  destination: string
+  etaMin: number
+  distanceKm: number
+  nextTurn: string
+  nextTurnMeters: number
+  speed: number
+  speedLimit: number
+  originCoords?: LatLngTuple | null
+  destinationCoords?: LatLngTuple | null
+  geometry?: LatLngTuple[]
+  steps?: string[]
+  routeSource?: string
+  coordinateSystem?: string
+}
 
 /* ========================== 对话 & Agent ========================== */
 
@@ -164,7 +179,7 @@ export const gestureCommands: GestureCommand[] = [
 /* ========================== Music ========================== */
 
 export interface SongInfo { id: number; name: string; artist: string; album: string; url: string; cover: string; duration: number }
-export interface MusicState { playing: boolean; current_song: SongInfo; playlist: SongInfo[]; playlist_index: number; volume: number }
+export interface MusicState { playing: boolean; current_song: SongInfo; playlist: SongInfo[]; playlist_index: number; volume: number; message?: string }
 
 /* ========================== Agent API 类型 ========================== */
 

@@ -107,6 +107,12 @@ export function useAgentWS() {
           distanceKm: dist,
           etaMin: dur,
           nextTurn: (data.route_summary as string) || (data.routeSummary as string) || '',
+          originCoords: (data.origin_coords as [number, number] | null) || null,
+          destinationCoords: (data.destination_coords as [number, number] | null) || null,
+          geometry: (data.geometry as [number, number][]) || [],
+          steps: (data.steps as string[]) || [],
+          routeSource: (data.source as string) || '',
+          coordinateSystem: (data.coordinate_system as string) || '',
         }
         // 也作为 Agent 结果卡展示
         results.value = [

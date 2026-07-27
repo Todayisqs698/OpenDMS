@@ -9,6 +9,7 @@
 - 综合判断：多模态信号融合
 """
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -320,14 +321,45 @@ def _handle_speech(data: dict) -> dict:
     if not text:
         return {"action_code": "unknown", "confidence": 0.0, "source": "local"}
 
-    # 精确匹配
-    for keyword, action in SPEECH_KEYWORD_MAP.items():
-        if keyword in text:
+    normalized = re.sub(r"\s+", "", text)
+
+    command_patterns = [
+        (r"(打开|开启|启动|开一下).*空调|空调.*(打开|开启|启动)", "TurnOnAC", 0.92),
+        (r"(关闭|关掉|关一下).*空调|空调.*(关闭|关掉)", "TurnOffAC", 0.92),
+        (r"(调高|升高|提高).*温度|温度.*(调高|升高|提高)", "temp_up", 0.88),
+        (r"(调低|降低|下降).*温度|温度.*(调低|降低|下降)", "temp_down", 0.88),
+        (r"(播放|放一下|来一首|听一下).*(音乐|歌|歌曲|周杰伦|王菲|林俊杰|陈奕迅|邓紫棋|薛之谦)", "PlayMusic", 0.9),
+        (r"^(播放|放一下|来一首|听一下)(音乐|歌)?$", "PlayMusic", 0.82),
+        (r"(暂停|停止|停掉|关掉).*(音乐|播放|歌曲)|^(暂停播放|停止播放|关音乐)$", "StopMusic", 0.9),
+        (r"^(下一首|切歌)$|播放下一首", "next_track", 0.9),
+        (r"^(上一首)$|播放上一首", "previous_track", 0.9),
+        (r"(音量|声音).*(调大|加大|大一点|提高)", "volume_up", 0.88),
+        (r"(音量|声音).*(调小|减小|小一点|降低)", "volume_down", 0.88),
+        (r"(打开|开一下).*车窗", "window_open", 0.9),
+        (r"(关闭|关掉|关一下).*车窗", "window_close", 0.9),
+        (r"(打开|开一下).*灯", "light_on", 0.86),
+        (r"(关闭|关掉|关一下).*灯", "light_off", 0.86),
+        (r"(我在看路|注意到了|已注意)", "NoticeRoad", 0.9),
+    ]
+
+    for pattern, action, confidence in command_patterns:
+        if re.search(pattern, normalized):
             return {
                 "action_code": action,
-                "confidence": 0.85 if len(keyword) >= 3 else 0.7,
+                "confidence": confidence,
                 "source": "local",
+                "decision_mode": "EXECUTE",
             }
+
+    weak_task_hints = ["导航", "路线", "怎么走", "天气", "气温", "音乐", "空调", "温度"]
+    if any(hint in normalized for hint in weak_task_hints):
+        return {
+            "action_code": "semantic_query",
+            "confidence": 0.45,
+            "source": "local",
+            "decision_mode": "CLARIFY",
+            "hint": "weak_keyword_needs_semantics",
+        }
 
     # 未匹配 → 需要云端理解
     return {

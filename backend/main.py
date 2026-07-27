@@ -3,7 +3,10 @@ EdgeGuard Backend — FastAPI + WebSocket + 摄像头引擎
 
 启动: cd backend && uvicorn main:app --reload --port 8000
 """
+from __future__ import annotations
+
 import sys, os
+import json
 import time
 import asyncio
 import logging
@@ -28,8 +31,8 @@ from pydantic import BaseModel
 from app.ws.manager import ws_manager
 # 数据库持久化
 from backend.app.core.database import insert_alert_record, insert_interaction_record, init_db, create_drive_session, finish_drive_session, set_current_session_id, query_alerts, query_interactions, get_session_summary
-from modules.ai.agent_core import EdgeGuardAgent
 from modules.ai.agent_graph import ReActAgent
+from modules.ai.structured_results import push_structured_results, iter_structured_result_events
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +46,8 @@ def get_session_id() -> int:
     return _current_session_id
 
 # ── 全局 Agent 实例 ──
-_edgeguard_agent: EdgeGuardAgent | None = None
 _react_agent: ReActAgent | None = None
+_legacy_multimodal_orchestrator = None
 
 # 保存事件循环引用，便于在线程中调度 WS 广播
 _loop = None
@@ -56,17 +59,102 @@ _current_gps: dict = {}  # {"lat": float, "lon": float, "updated_at": float}
 _MUSIC_DIR = os.path.join(_project_root, "data", "music")
 os.makedirs(_MUSIC_DIR, exist_ok=True)
 
-def get_agent() -> EdgeGuardAgent:
-    global _edgeguard_agent
-    if _edgeguard_agent is None:
-        _edgeguard_agent = EdgeGuardAgent(memory_path=os.path.join(_project_root, "data", "agent_memory.json"))
-    return _edgeguard_agent
-
 def get_react_agent() -> ReActAgent:
     global _react_agent
     if _react_agent is None:
         _react_agent = ReActAgent()
     return _react_agent
+
+
+def _get_legacy_multimodal_orchestrator():
+    """Deprecated multimodal camera/event orchestrator kept for /api/analyze compatibility."""
+    global _legacy_multimodal_orchestrator
+    if _legacy_multimodal_orchestrator is None:
+        from modules.ai.langgraph_orchestrator import Orchestrator
+        _legacy_multimodal_orchestrator = Orchestrator()
+    return _legacy_multimodal_orchestrator
+
+
+def _resolve_agent_safety_level(response, driver_state: dict) -> str:
+    """Use the orchestrator's actual route/result before falling back to raw sensor state."""
+    if response and getattr(response, "route", "") == "safety_shortcut":
+        return "dangerous"
+
+    if response:
+        for result in getattr(response, "results", []) or []:
+            if getattr(result, "intent_category", "") == "safety":
+                for action in getattr(result, "actions", []) or []:
+                    level = action.get("level") if isinstance(action, dict) else None
+                    if level:
+                        return level
+
+    return (driver_state or {}).get("severity", "normal")
+
+
+def _emit_orchestrator_steps(response, driver_state: dict, sync_push):
+    """Emit coarse-grained agent_step events for the unified orchestrator path."""
+    safety_level = _resolve_agent_safety_level(response, driver_state)
+    sync_push("step", {
+        "id": "perceive",
+        "label": f"感知驾驶状态：{safety_level}",
+        "status": "done",
+        "stage": "perceive",
+    })
+
+    if response.route == "safety_shortcut":
+        sync_push("step", {
+            "id": "safety_gate",
+            "label": "安全门控：危险状态，已短路告警",
+            "status": "done",
+            "stage": "safety",
+        })
+        return
+
+    intents = response.intent_plan.get("intents", []) if response.intent_plan else []
+    if intents:
+        labels = [f"{i.get('category')}→{i.get('agent')}" for i in intents]
+        sync_push("step", {
+            "id": "intent_plan",
+            "label": "意图规划：" + "、".join(labels),
+            "status": "done",
+            "stage": "intent",
+        })
+
+    for result in response.results:
+        status = "done" if result.success else "error"
+        sync_push("step", {
+            "id": f"dispatch_{result.intent_id}",
+            "label": f"{result.agent_name} 处理 {result.intent_category}",
+            "status": status,
+            "stage": "dispatch",
+        })
+
+
+def _run_unified_agent_sync(text: str, driver_state: dict, sync_push=None, callbacks: dict = None) -> dict:
+    """Run the canonical AgentOrchestrator path and return the legacy chat-shaped result."""
+    orch = _get_orchestrator()
+
+    def noop_push(event_type: str, data: dict):
+        return None
+
+    push = sync_push or noop_push
+    response = orch.process(text=text, driver_state=driver_state, callbacks=callbacks)
+    safety_level = _resolve_agent_safety_level(response, driver_state)
+    _emit_orchestrator_steps(response, driver_state, push)
+
+    agent_result = {
+        "reply": response.overall_reply,
+        "steps": len(response.results),
+        "status": "emergency" if response.route == "safety_shortcut" else "success",
+        "safety_level": safety_level,
+        "route": response.route,
+        "intent_plan": response.intent_plan,
+        "orchestrator_response": response,
+    }
+
+    push_structured_results(response, push)
+    push("final", {"text": response.overall_reply})
+    return agent_result
 
 def get_camera_state() -> dict:
     """获取摄像头实时状态（安全包装，摄像头未启动时返回 None）"""
@@ -206,6 +294,62 @@ app.mount("/static/music", StaticFiles(directory=_MUSIC_DIR), name="music_static
 @app.get("/api/health")
 def health():
     return {"status": "ok", "system": "EdgeGuard"}
+
+
+# ── 运行时配置热更新 ─────────────────────────────────────────────────
+from modules.ai.runtime_config import (
+    get_runtime_settings,
+    get_runtime_settings_masked,
+    update_runtime_settings,
+)
+
+
+class SettingsUpdate(BaseModel):
+    """前端设置页提交的配置更新。"""
+    DEEPSEEK_API_KEY: str | None = None
+    AMAP_API_KEY: str | None = None
+    OPENWEATHER_API_KEY: str | None = None
+    XHS_COOKIE: str | None = None
+    LLM_PROVIDER: str | None = None
+    OPENAI_API_KEY: str | None = None
+    HF_ENDPOINT: str | None = None
+
+
+@app.get("/api/settings")
+def get_settings():
+    """读取当前运行时配置（敏感字段脱敏）。"""
+    return {
+        "success": True,
+        "settings": get_runtime_settings_masked(),
+    }
+
+
+@app.post("/api/settings")
+def update_settings(req: SettingsUpdate):
+    """更新运行时配置，立即生效并持久化。
+
+    空字符串视为清除该配置项。
+    敏感字段发送 ***已配置*** 时视为不修改（保留原值）。
+    """
+    # 过滤掉 None 和脱敏占位符
+    updates = {}
+    masked = get_runtime_settings_masked()
+    for key, value in req.model_dump().items():
+        if value is None:
+            continue
+        if value == "***已配置***":
+            continue  # 前端回传的脱敏占位符，不修改
+        updates[key] = value
+
+    if not updates:
+        return {"success": True, "message": "无更新", "settings": get_runtime_settings_masked()}
+
+    update_runtime_settings(updates)
+    return {
+        "success": True,
+        "message": "配置已更新并立即生效",
+        "settings": get_runtime_settings_masked(),
+    }
 
 
 @app.get("/api/tts")
@@ -473,7 +617,6 @@ async def analyze(req: AnalyzeRequest):
     from modules.ai.edge_cloud_router import get_router
     from modules.ai.local_decision_engine import decide_locally
     from modules.ai.fallback_handler import handle_fallback
-    from modules.ai.langgraph_orchestrator import Orchestrator
     import time
 
     # 更新 DriverStateMachine（供 Agent perceive_node 使用）
@@ -486,7 +629,7 @@ async def analyze(req: AnalyzeRequest):
         pass
 
     router = get_router()
-    orchestrator = Orchestrator()
+    orchestrator = _get_legacy_multimodal_orchestrator()
 
     multimodal_input = MultimodalInput(
         gaze_data={"state": req.gaze_state, "duration": req.gaze_duration},
@@ -509,6 +652,11 @@ async def analyze(req: AnalyzeRequest):
         result = handle_fallback({"action_code": "", "text": req.speech_text})
     else:
         result = orchestrator.process(multimodal_input)
+
+    if isinstance(result, dict):
+        result.setdefault("legacy", route != "local")
+        if route != "local":
+            result.setdefault("replacement", "/api/agent/chat for user text requests")
 
     await ws_manager.broadcast({"type": "ai_decision", "data": result})
     await ws_manager.broadcast({"type": "driver_state", "data": {
@@ -607,12 +755,9 @@ class AgentQueryRequest(BaseModel):
 @app.post("/api/agent/query")
 async def agent_query(req: AgentQueryRequest):
     """
-    Agent 主入口 — 真正的感知-思考-行动循环。
-    替代旧版 /api/interaction/query，支持规划/工具调用/记忆/反思。
+    Deprecated compatibility endpoint.
+    新代码请使用 /api/agent/chat；此端点委托统一 Orchestrator 路径。
     """
-    agent = get_agent()
-
-    # 构建 driver_state
     driver_state = {
         "risk": req.driver_risk,
         "fatigue": req.driver_fatigue,
@@ -624,31 +769,38 @@ async def agent_query(req: AgentQueryRequest):
     if cam_state:
         driver_state.update(cam_state)
 
-    # 执行 Agent Loop
-    result = agent.handle_user_input(text=req.text, gesture=req.gesture, driver_state=driver_state)
-
-    if result is None:
-        return {"status": "ok", "result": {"reply_text": "无待处理目标", "actions": []}}
+    result = await asyncio.get_running_loop().run_in_executor(
+        None,
+        lambda: _run_unified_agent_sync(req.text or f"手势指令: {req.gesture}", driver_state),
+    )
+    response = result.get("orchestrator_response")
 
     return {
         "status": "ok",
+        "deprecated": True,
+        "replacement": "/api/agent/chat",
         "result": {
             "reply_text": result.get("reply", ""),
-            "goal_id": result.get("goal_id"),
-            "goal_description": result.get("goal_description"),
             "status": result.get("status"),
-            "actions": result.get("actions", []),
+            "actions": response.actions if response else [],
             "allow_execute": result.get("status") == "success",
             "isFinal": True,
+            "route": result.get("route", "orchestrator"),
+            "intent_plan": result.get("intent_plan", {}),
         }
     }
 
 
 @app.get("/api/agent/thinking")
 async def agent_thinking():
-    """获取 Agent 思维链，供前端可视化"""
-    agent = get_agent()
-    return {"status": "ok", "chain": agent.get_thinking_chain(), "goals": [g.__dict__ for g in agent.goals._goals[:5]]}
+    """Deprecated: thinking steps are now streamed as agent_step events."""
+    return {
+        "status": "ok",
+        "deprecated": True,
+        "replacement": "/ws/agent_panel agent_step events",
+        "chain": [],
+        "goals": [],
+    }
 
 
 # ── ReAct Agent Chat 路由（流式 WebSocket 推送）──
@@ -659,13 +811,55 @@ class AgentChatRequest(BaseModel):
     driver_state: dict = {}
 
 
+def _sse_event(event_type: str, data: dict) -> str:
+    payload = json.dumps({"type": event_type, "data": data}, ensure_ascii=False)
+    return f"event: {event_type}\ndata: {payload}\n\n"
+
+
 @app.post("/api/agent/chat")
-async def agent_chat(req: AgentChatRequest):
+async def agent_chat(req: AgentChatRequest, stream: bool = False):
     """
-    ReAct Agent 主入口 — 真正的感知-思考-行动循环。
-    支持流式 WebSocket 推送 Agent 执行过程。
+    统一 Agent 主入口。
+    默认由 AgentOrchestrator 自动判断快速规则、并行意图、ReAct 子流程和安全短路。
     """
-    agent = get_react_agent()
+    if stream:
+        driver_state = dict(req.driver_state)
+        cam_state = get_camera_state()
+        if cam_state:
+            driver_state.update(cam_state)
+        loop = asyncio.get_running_loop()
+        event_queue: asyncio.Queue = asyncio.Queue()
+
+        def queue_push(event_type: str, data: dict):
+            loop.call_soon_threadsafe(event_queue.put_nowait, {"type": f"agent_{event_type}", "data": data})
+
+        def sync_run():
+            try:
+                response = _get_orchestrator().process(
+                    text=req.text,
+                    driver_state=driver_state,
+                    callbacks={
+                        "on_intent": lambda plan: queue_push("intent", plan),
+                        "on_step": lambda step: queue_push("step", step),
+                        "on_result": lambda result: queue_push("result", result),
+                    },
+                )
+                queue_push("final", {"text": response.overall_reply})
+                for event_type, data in iter_structured_result_events(response):
+                    queue_push(event_type, data)
+            finally:
+                loop.call_soon_threadsafe(event_queue.put_nowait, None)
+
+        loop.run_in_executor(None, sync_run)
+
+        async def sse_gen():
+            while True:
+                item = await event_queue.get()
+                if item is None:
+                    break
+                yield _sse_event(item["type"], item["data"])
+
+        return StreamingResponse(sse_gen(), media_type="text/event-stream")
 
     # 合并摄像头状态
     driver_state = dict(req.driver_state)
@@ -686,10 +880,17 @@ async def agent_chat(req: AgentChatRequest):
         except Exception:
             pass
 
-    callbacks = [sync_push]
-
     def sync_chat():
-        agent_result = agent.chat(text=req.text, driver_state=driver_state, callbacks=callbacks)
+        agent_result = _run_unified_agent_sync(
+            req.text,
+            driver_state,
+            sync_push,
+            callbacks={
+                "on_intent": lambda plan: sync_push("intent", plan),
+                "on_step": lambda step: sync_push("step", step),
+                "on_result": lambda result: sync_push("result", result),
+            },
+        )
 
         sid = _current_session_id
         reply_text = agent_result.get("reply", "")
@@ -739,6 +940,8 @@ async def agent_chat(req: AgentChatRequest):
             "steps": result.get("steps", 0),
             "safety_level": result.get("safety_level", "normal"),
             "status": result.get("status", ""),
+            "route": result.get("route", "orchestrator"),
+            "intent_plan": result.get("intent_plan", {}),
         }
     }
 
@@ -802,50 +1005,7 @@ async def agent_orchestrate(req: OrchestratorRequest):
 
     def sync_run():
         response = orch.process(text=req.text, driver_state=driver_state)
-
-        # 结构化推送：将 recommend_agent 的导航/天气结果推送到 AgentResultPanel
-        for r in response.results:
-            if not r.success:
-                continue
-            rec_data = r.data or {}
-            if r.intent_category == "navigation" and rec_data.get("nav_data"):
-                nav = rec_data["nav_data"]
-                sync_push("navigation", {
-                    "destination": nav.get("destination", ""),
-                    "distance_km": nav.get("distance_km", 0),
-                    "duration_min": nav.get("duration_min", 0),
-                    "route_summary": nav.get("route_summary", ""),
-                    "origin": nav.get("origin", "当前位置"),
-                    "map_url": nav.get("map_url", ""),
-                    "amap_nav_url": nav.get("amap_nav_url", ""),
-                })
-            elif r.intent_category == "weather":
-                weather = rec_data.get("weather", {})
-                sync_push("weather_query", {
-                    "city": weather.get("desc", ""),
-                    "weather_desc": weather.get("desc", ""),
-                    "temperature": weather.get("temperature"),
-                    "driving_context": rec_data.get("reply", ""),
-                })
-            elif r.intent_category == "trip_plan":
-                trip = rec_data.get("trip_plan", {})
-                if trip:
-                    sync_push("trip_plan", {
-                        "city": trip.get("city", ""),
-                        "days": trip.get("days", 1),
-                        "summary": trip.get("summary", ""),
-                        "budget": trip.get("budget", {}),
-                        "itinerary": trip.get("itinerary", []),
-                    })
-            elif r.intent_category == "attractions":
-                attrs = rec_data.get("attractions", [])
-                if attrs:
-                    sync_push("attractions", {
-                        "city": rec_data.get("city", ""),
-                        "attractions": attrs,
-                    })
-
-        # 推送最终回复
+        push_structured_results(response, sync_push)
         sync_push("final", {"text": response.overall_reply})
         return response
 
@@ -890,7 +1050,9 @@ async def environment(city: str = "", lat: float = None, lon: float = None):
     # 存储 GPS 坐标供 start_navigation 使用
     if lat is not None and lon is not None:
         import time as _time
+        from modules.ai.location_store import get_location_store
         _current_gps.update({"lat": lat, "lon": lon, "updated_at": _time.time()})
+        get_location_store().update(lat=lat, lon=lon, source="gps")
         logger.info(f"📍 GPS 已更新: lat={lat}, lon={lon}")
 
     agent = EnvironmentAgent()
@@ -957,6 +1119,43 @@ def nav_route(req: NavRouteRequest):
         pass
 
     return result
+
+
+# ── 地理编码代理（前端地图标注目的地用）──
+
+@app.get("/api/map/geocode")
+def map_geocode(address: str = ""):
+    """将地址/地名转换为经纬度坐标，使用高德地理编码 API。"""
+    import httpx
+
+    address = (address or "").strip()
+    if not address:
+        return {"success": False, "error": "地址不能为空", "lat": None, "lng": None}
+
+    amap_key = os.getenv("AMAP_API_KEY", "")
+    if not amap_key:
+        return {"success": False, "error": "高德 API Key 未配置", "lat": None, "lng": None}
+
+    try:
+        resp = httpx.get(
+            "https://restapi.amap.com/v3/geocode/geo",
+            params={"address": address, "key": amap_key},
+            timeout=5.0,
+        )
+        data = resp.json()
+        if data.get("status") == "1" and data.get("geocodes"):
+            location = data["geocodes"][0].get("location", "")
+            if "," in location:
+                lng, lat = location.split(",")
+                return {
+                    "success": True,
+                    "lat": float(lat),
+                    "lng": float(lng),
+                    "formatted": data["geocodes"][0].get("formatted_address", address),
+                }
+        return {"success": False, "error": "未找到匹配地点", "lat": None, "lng": None}
+    except Exception as e:
+        return {"success": False, "error": f"地理编码失败: {e}", "lat": None, "lng": None}
 
 
 # ── GPS 位置上报 ──
@@ -1047,9 +1246,11 @@ async def gesture_available():
 async def update_gps(lat: float, lon: float):
     """前端上报 GPS 坐标，供导航工具使用"""
     import time as _time
+    from modules.ai.location_store import get_location_store
     _current_gps.update({"lat": lat, "lon": lon, "updated_at": _time.time()})
+    snap = get_location_store().update(lat=lat, lon=lon, source="gps")
     logger.info(f"📍 GPS 已更新: lat={lat}, lon={lon}")
-    return {"status": "ok"}
+    return {"status": "ok", "location": snap}
 
 
 @app.get("/api/gps/current")
@@ -1180,6 +1381,7 @@ _music_state = {
     "playlist": [],
     "playlist_index": -1,
     "volume": 80,
+    "message": "",
 }
 
 
@@ -1208,6 +1410,9 @@ async def music_search(req: MusicSearchRequest):
                 params={"keywords": req.keyword},
             )
             data = resp.json()
+            # 网易云 API 返回非 200 表示需要登录/Cookie失效，直接降级
+            if data.get("code") != 200:
+                raise ValueError(f"网易云API错误: code={data.get('code')}")
             songs = []
             result_songs = data.get("result", {}).get("songs", [])
             for s in result_songs[:10]:
@@ -1282,8 +1487,9 @@ async def music_play(req: MusicPlayRequest):
                 "artist": song["artist"], "album": song["album"],
                 "url": "", "cover": "", "duration": song["duration"],
             }
-            _music_state["playing"] = True
-            return {"status": "ok", "data": _music_state, "hint": "演示模式：无真实音频，启动 localhost:3000 获取在线播放"}
+            _music_state["playing"] = False
+            _music_state["message"] = "No playable audio source. Start localhost:3000 music API or add MP3/WAV files to data/music/."
+            return {"status": "needs_audio", "data": _music_state, "message": _music_state["message"]}
 
         # 否则尝试网易云API
         async with httpx.AsyncClient(timeout=10) as client:
@@ -1338,7 +1544,12 @@ async def music_play(req: MusicPlayRequest):
                 "cover": cover_url,
                 "duration": duration,
             }
+            if not play_url:
+                _music_state["playing"] = False
+                _music_state["message"] = "Music API did not return a playable URL. The song may require login or be copyright restricted."
+                return {"status": "needs_audio", "data": _music_state, "message": _music_state["message"]}
             _music_state["playing"] = True
+            _music_state["message"] = ""
 
             return {"status": "ok", "data": _music_state}
     except Exception as e:
@@ -1349,7 +1560,11 @@ async def music_play(req: MusicPlayRequest):
 def music_pause():
     """切换播放/暂停状态"""
     global _music_state
+    if not _music_state.get("playing") and not _music_state.get("current_song", {}).get("url"):
+        _music_state["message"] = "No playable audio source selected."
+        return {"status": "needs_audio", "data": _music_state, "message": _music_state["message"]}
     _music_state["playing"] = not _music_state["playing"]
+    _music_state["message"] = ""
     return {"status": "ok", "data": _music_state}
 
 
@@ -1540,7 +1755,7 @@ def voice_process(req: VoiceRequest):
     from modules.ai.local_decision_engine import decide_locally
     local = decide_locally({"trigger": "speech", "data": {"text": text}})
 
-    if local and local.get("action_code") and local.get("action_code") != "unknown":
+    if local and local.get("decision_mode") == "EXECUTE" and local.get("action_code") and local.get("action_code") != "unknown":
         action_code = local.get("action_code")
         reply = local.get("recommendation_text") or "已执行"
         route = "local"
@@ -1702,6 +1917,133 @@ def api_interactions(limit: int = 100, session_id: int = 0):
         return {"status": "ok", "total": len(rows), "data": rows}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+# ========== 异步旅行规划任务 (P2: 移植自 TripStar) ==========
+
+class AsyncTripRequest(BaseModel):
+    """异步旅行规划请求体"""
+    city: str
+    days: int = 2
+    preference: str = ""
+    origin: str = ""
+    waypoints: list[str] = []
+    forbidden_cities: list[str] = []
+
+
+@app.post("/api/trip/async")
+async def trip_async(req: AsyncTripRequest):
+    """提交异步旅行规划任务，立即返回 task_id，不阻塞请求。
+
+    前端可通过以下方式获取进度:
+    - WebSocket: /ws/trip/{task_id} (实时推送)
+    - HTTP 轮询: GET /api/trip/status/{task_id}
+    """
+    from modules.ai.trip_planner.task_manager import create_trip_task
+
+    task_id = create_trip_task(
+        city=req.city,
+        days=req.days,
+        preference=req.preference or None,
+        origin=req.origin,
+        waypoints=req.waypoints or None,
+        forbidden_cities=req.forbidden_cities or None,
+    )
+    logger.info("异步旅行任务已创建: task_id=%s city=%s days=%s", task_id, req.city, req.days)
+    return {
+        "task_id": task_id,
+        "status": "processing",
+        "ws_url": f"/ws/trip/{task_id}",
+        "poll_url": f"/api/trip/status/{task_id}",
+        "message": "任务已提交，可通过 WebSocket 或轮询获取进度",
+    }
+
+
+@app.get("/api/trip/status/{task_id}")
+async def trip_status(task_id: str):
+    """HTTP 轮询获取任务状态（WebSocket 不可用时的降级方案）。"""
+    from modules.ai.trip_planner.task_manager import get_task_status
+
+    status = get_task_status(task_id)
+    if status is None:
+        return {"status": "error", "message": f"任务 {task_id} 不存在"}
+    return {"status": "ok", "data": status}
+
+
+@app.websocket("/ws/trip/{task_id}")
+async def websocket_trip_task(websocket: WebSocket, task_id: str):
+    """WebSocket 实时推送旅行规划任务进度。
+
+    连接后立即发送当前状态快照，后续每次状态更新自动推送。
+    任务完成或失败后自动关闭连接。
+    """
+    from modules.ai.trip_planner.task_manager import (
+        get_task,
+        subscribe_to_task,
+        unsubscribe_from_task,
+    )
+
+    await websocket.accept()
+
+    task = get_task(task_id)
+    if task is None:
+        await websocket.send_json({
+            "task_id": task_id,
+            "status": "failed",
+            "stage": "failed",
+            "progress": 100,
+            "message": "任务不存在",
+            "error": "任务不存在",
+        })
+        await websocket.close(code=1008)
+        return
+
+    # 订阅后续更新
+    queue = subscribe_to_task(task_id)
+    if queue is None:
+        await websocket.send_json({
+            "task_id": task_id,
+            "status": "failed",
+            "message": "订阅失败",
+        })
+        await websocket.close(code=1008)
+        return
+
+    # 先发送当前状态快照
+    from modules.ai.trip_planner.task_manager import _build_task_event
+    snapshot = _build_task_event(task_id, task)
+    await websocket.send_json(snapshot)
+
+    # 如果任务已结束，直接关闭
+    if snapshot.get("status") in ("completed", "failed"):
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        unsubscribe_from_task(task_id, queue)
+        return
+
+    # 循环推送后续更新
+    try:
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=120.0)
+                await websocket.send_json(event)
+                if event.get("status") in ("completed", "failed"):
+                    break
+            except asyncio.TimeoutError:
+                # 发送心跳保持连接
+                await websocket.send_json({"type": "ping", "task_id": task_id})
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.warning("WebSocket trip task %s 异常: %s", task_id, e)
+    finally:
+        unsubscribe_from_task(task_id, queue)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
 
 
 # ========== 前端静态文件（手机/平板直接访问后端即可） ==========

@@ -95,8 +95,8 @@ TOOL_SCHEMAS = [
                 "properties": {
                     "command": {
                         "type": "string",
-                        "enum": ["search", "play", "pause", "next", "prev", "volume"],
-                        "description": "控制命令"
+                        "enum": ["search", "play", "pause", "stop", "next", "prev", "volume"],
+                        "description": "控制命令。stop=停止播放(别名pause)"
                     },
                     "keyword": {"type": "string", "description": "搜索关键词，仅search命令时使用"},
                     "song_id": {"type": "integer", "description": "歌曲ID，仅play命令时使用"},
@@ -210,12 +210,54 @@ TOOL_SCHEMAS = [
     {
         "type": "function",
         "function": {
+            "name": "get_weather_forecast",
+            "description": "查询城市逐日天气预报，用于多日行程规划。优先使用高德天气 forecast。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "城市名称，如天津、北京"},
+                    "days": {"type": "integer", "description": "需要的预报天数，默认3天", "default": 3}
+                },
+                "required": ["city"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_hotels",
+            "description": "搜索城市真实酒店 POI，只返回酒店名称、地址、坐标、评分、价格区间和类型等住宿核心字段。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "城市名称，如天津、北京"},
+                    "count": {"type": "integer", "description": "返回酒店数量，默认5", "default": 5},
+                    "preference": {"type": "string", "description": "住宿偏好，如舒适型酒店、经济型酒店、亲子酒店"}
+                },
+                "required": ["city"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "plan_trip",
             "description": "为用户生成结构化行程规划。自动搜索景点、查询天气，生成包含游览、用餐、交通的时间线。结果会展示在专门的行程面板中。",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "city": {"type": "string", "description": "目的地城市，如天津、北京"},
+                    "origin": {"type": "string", "description": "自驾线路起点城市，如天津，可选"},
+                    "waypoints": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "自驾线路必须途经的城市列表，如[\"西安\", \"兰州\"]，可选"
+                    },
+                    "forbidden_cities": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "自驾线路需要避开的城市列表，如[\"郑州\"]，可选"
+                    },
                     "days": {"type": "integer", "description": "旅行天数，默认1天", "default": 1},
                     "preference": {
                         "type": "string",
@@ -224,6 +266,43 @@ TOOL_SCHEMAS = [
                     }
                 },
                 "required": ["city"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "save_location",
+            "description": "保存一个常用地点（如家、公司）。保存后可直接说「导航回家」自动导航。当用户说「我家在XX路」或「记住公司地址是XX」时调用此工具。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "enum": ["home", "company"],
+                        "description": "地点标签：home=家，company=公司"
+                    },
+                    "address": {"type": "string", "description": "详细地址，如「北京市朝阳区建国路88号」"}
+                },
+                "required": ["label", "address"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_saved_location",
+            "description": "查询已保存的地点信息。当用户问「我家的地址是什么」或「你定义的家是哪里」时调用此工具查看。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "label": {
+                        "type": "string",
+                        "enum": ["home", "company"],
+                        "description": "地点标签：home=家，company=公司"
+                    }
+                },
+                "required": ["label"]
             }
         }
     },
@@ -283,14 +362,14 @@ def control_ac(command: str, **kwargs) -> dict:
 
 def control_music(command: str, **kwargs) -> dict:
     """
-    控制车载音乐播放。支持搜索歌曲、播放、暂停、切歌、音量调节。
+    控制车载音乐播放。支持搜索歌曲、播放、暂停/停止、切歌、音量调节。
 
     Args:
-        command: 控制命令 (search / play / pause / next / prev / volume)
+        command: 控制命令 (search / play / pause / stop / next / prev / volume)
         **kwargs: keyword, song_id, volume 等
 
     Returns:
-        {"success": bool, ...}
+        {"success": bool, ...}  success 严格基于后端返回的 status 字段
     """
     try:
         if command == "search":
@@ -301,38 +380,85 @@ def control_music(command: str, **kwargs) -> dict:
                 timeout=_TIMEOUT,
             )
             data = resp.json()
-            return {"success": True, "songs": data.get("data", data.get("songs", []))}
+            songs = data.get("data", data.get("songs", []))
+            return {"success": data.get("status") == "ok", "songs": songs,
+                    "error": data.get("message", "") if data.get("status") != "ok" else ""}
 
         elif command == "play":
             song_id = kwargs.get("song_id")
-            resp = httpx.post(
-                f"{_BACKEND_BASE}/api/music/play",
-                json={"song_id": song_id},
-                timeout=_TIMEOUT,
-            )
-            data = resp.json()
-            return {"success": True, "state": data.get("data")}
+            if song_id:
+                # 有 song_id：直接播放指定歌曲
+                resp = httpx.post(
+                    f"{_BACKEND_BASE}/api/music/play",
+                    json={"song_id": song_id},
+                    timeout=_TIMEOUT,
+                )
+                data = resp.json()
+                status = data.get("status", "")
+                if status == "ok":
+                    return {"success": True, "state": data.get("data")}
+                else:
+                    msg = data.get("message", "")
+                    if status == "needs_audio":
+                        msg = "当前歌曲无可用音频源，请先搜索并选择歌曲"
+                    elif not msg:
+                        msg = f"播放失败 (status={status})"
+                    return {"success": False, "error": msg, "status": status}
+            else:
+                # 无 song_id：调用 pause 端点恢复当前播放（pause 是 toggle）
+                resp = httpx.post(
+                    f"{_BACKEND_BASE}/api/music/pause",
+                    timeout=_TIMEOUT,
+                )
+                data = resp.json()
+                status = data.get("status", "")
+                state = data.get("data", {})
+                playing = state.get("playing") if isinstance(state, dict) else None
+                if status == "ok" and playing:
+                    return {"success": True, "state": state,
+                            "message": "已恢复播放"}
+                elif status == "needs_audio":
+                    return {"success": False, "error": "当前没有可播放的歌曲，请先搜索并选择歌曲",
+                            "status": status}
+                elif status == "ok" and not playing:
+                    # toggle 后变为暂停，再 toggle 一次恢复
+                    httpx.post(f"{_BACKEND_BASE}/api/music/pause", timeout=_TIMEOUT)
+                    return {"success": True, "state": state,
+                            "message": "已恢复播放"}
+                else:
+                    return {"success": False, "error": data.get("message", "播放失败"),
+                            "status": status}
 
-        elif command == "pause":
+        elif command in ("pause", "stop"):
+            # stop 作为 pause 的别名（后端 pause 实为 toggle）
             resp = httpx.post(
                 f"{_BACKEND_BASE}/api/music/pause",
                 timeout=_TIMEOUT,
             )
-            return {"success": resp.status_code == 200}
+            data = resp.json()
+            return {"success": data.get("status") == "ok",
+                    "state": data.get("data"),
+                    "error": data.get("message", "") if data.get("status") != "ok" else ""}
 
         elif command == "next":
             resp = httpx.post(
                 f"{_BACKEND_BASE}/api/music/next",
                 timeout=_TIMEOUT,
             )
-            return {"success": resp.status_code == 200}
+            data = resp.json()
+            return {"success": data.get("status") == "ok",
+                    "state": data.get("data"),
+                    "error": data.get("message", "") if data.get("status") != "ok" else ""}
 
         elif command == "prev":
             resp = httpx.post(
                 f"{_BACKEND_BASE}/api/music/prev",
                 timeout=_TIMEOUT,
             )
-            return {"success": resp.status_code == 200}
+            data = resp.json()
+            return {"success": data.get("status") == "ok",
+                    "state": data.get("data"),
+                    "error": data.get("message", "") if data.get("status") != "ok" else ""}
 
         elif command == "volume":
             volume = kwargs.get("volume", 50)
@@ -341,7 +467,10 @@ def control_music(command: str, **kwargs) -> dict:
                 json={"volume": volume},
                 timeout=_TIMEOUT,
             )
-            return {"success": resp.status_code == 200}
+            data = resp.json()
+            return {"success": data.get("status") == "ok",
+                    "state": data.get("data"),
+                    "error": data.get("message", "") if data.get("status") != "ok" else ""}
 
         else:
             return {"success": False, "error": f"未知的音乐控制命令: {command}"}
@@ -393,6 +522,71 @@ def get_weather(city: Optional[str] = None) -> dict:
     except Exception as e:
         logger.error(f"get_weather 工具调用失败: {e}")
         return {"success": False, "error": str(e)}
+
+
+def get_weather_forecast(city: str, days: int = 3) -> dict:
+    """
+    查询城市逐日天气预报。
+
+    当前实现使用高德天气 extensions=all；失败时返回 success=False，由调用方决定 fallback。
+    """
+    amap_key = _get_amap_key()
+    if not amap_key:
+        logger.warning("get_weather_forecast: AMAP_API_KEY 未配置")
+        return {"success": False, "error": "高德地图 API Key 未配置", "city": city, "forecasts": []}
+
+    try:
+        geo_resp = httpx.get(
+            "https://restapi.amap.com/v3/geocode/geo",
+            params={"address": city, "key": amap_key},
+            timeout=5.0,
+        )
+        geo_data = geo_resp.json()
+        if geo_data.get("status") != "1" or not geo_data.get("geocodes"):
+            return {"success": False, "error": "城市编码查询失败", "city": city, "forecasts": []}
+
+        adcode = geo_data["geocodes"][0].get("adcode", "")
+        if not adcode:
+            return {"success": False, "error": "城市 adcode 不可用", "city": city, "forecasts": []}
+
+        weather_resp = httpx.get(
+            "https://restapi.amap.com/v3/weather/weatherInfo",
+            params={"city": adcode, "key": amap_key, "extensions": "all"},
+            timeout=5.0,
+        )
+        weather_data = weather_resp.json()
+        if weather_data.get("status") != "1" or not weather_data.get("forecasts"):
+            return {"success": False, "error": "天气预报查询失败", "city": city, "forecasts": []}
+
+        casts = weather_data["forecasts"][0].get("casts", [])
+        forecasts = []
+        for cast in casts[:max(1, int(days or 1))]:
+            forecasts.append({
+                "date": cast.get("date", ""),
+                "day_weather": cast.get("dayweather", ""),
+                "night_weather": cast.get("nightweather", ""),
+                "day_temp": cast.get("daytemp", ""),
+                "night_temp": cast.get("nighttemp", ""),
+                "wind_direction": cast.get("daywind", "") or cast.get("nightwind", ""),
+                "wind_power": cast.get("daypower", "") or cast.get("nightpower", ""),
+                "source": "amap_forecast",
+                "note": "高德逐日天气预报",
+            })
+
+        return {
+            "success": True,
+            "city": city,
+            "adcode": adcode,
+            "report_time": weather_data["forecasts"][0].get("reporttime", ""),
+            "forecasts": forecasts,
+        }
+
+    except httpx.TimeoutException:
+        logger.error("get_weather_forecast: 高德 API 请求超时")
+        return {"success": False, "error": "天气预报查询超时", "city": city, "forecasts": []}
+    except Exception as e:
+        logger.error(f"get_weather_forecast 执行异常: {e}")
+        return {"success": False, "error": str(e), "city": city, "forecasts": []}
 
 
 def alert_driver(alert_type: str, severity: str, message: str) -> dict:
@@ -698,6 +892,85 @@ def search_attractions(
         return {"success": False, "error": str(e), "city": city, "attractions": []}
 
 
+def search_hotels(city: str, count: int = 5, preference: Optional[str] = None) -> dict:
+    """
+    搜索城市酒店 POI。
+
+    酒店解析独立于景点解析：不做室内检测、天气提示、游览时长估算或景点分类。
+    """
+    amap_key = _get_amap_key()
+    if not amap_key:
+        logger.warning("search_hotels: AMAP_API_KEY 未配置")
+        return {"success": False, "error": "高德地图 API Key 未配置", "city": city, "hotels": []}
+
+    keyword = preference or "酒店"
+    if "酒店" not in keyword and "宾馆" not in keyword and "住宿" not in keyword:
+        keyword = f"{keyword} 酒店"
+
+    try:
+        resp = httpx.get(_AMAP_POI_URL, params={
+            "keywords": keyword,
+            "city": city,
+            "citylimit": "true",
+            "types": "100000",
+            "offset": min(count * 3, 25),
+            "page": 1,
+            "key": amap_key,
+            "extensions": "all",
+        }, timeout=10)
+        data = resp.json()
+
+        if data.get("status") != "1":
+            logger.error(f"高德酒店 POI 搜索失败: {data.get('info', '')}")
+            return {"success": False, "error": f"高德 API 错误: {data.get('info', '')}", "city": city, "hotels": []}
+
+        hotels = []
+        for poi in data.get("pois", []):
+            biz_ext = poi.get("biz_ext", {}) or {}
+            photos = poi.get("photos", []) or []
+
+            rating = ""
+            rating_str = biz_ext.get("rating", "") or ""
+            if rating_str:
+                try:
+                    rating = str(round(float(rating_str), 1))
+                except (ValueError, TypeError):
+                    rating = str(rating_str)
+
+            cost = 0
+            cost_str = biz_ext.get("cost", "") or ""
+            if cost_str:
+                try:
+                    cost = int(float(cost_str))
+                except (ValueError, TypeError):
+                    cost = 0
+
+            photo_url = ""
+            if photos and isinstance(photos, list):
+                photo_url = photos[0].get("url", "") if isinstance(photos[0], dict) else ""
+
+            hotels.append({
+                "name": poi.get("name", ""),
+                "address": poi.get("address", "") or city,
+                "location": poi.get("location", ""),
+                "rating": rating,
+                "price_range": f"{cost}元起" if cost else "",
+                "type": poi.get("type", "") or preference or "酒店",
+                "estimated_cost": cost or 400,
+                "photo_url": photo_url,
+                "source": "amap",
+            })
+
+        return {"success": True, "city": city, "count": len(hotels[:count]), "hotels": hotels[:count]}
+
+    except httpx.TimeoutException:
+        logger.error("search_hotels: 高德 API 请求超时")
+        return {"success": False, "error": "酒店搜索超时", "city": city, "hotels": []}
+    except Exception as e:
+        logger.error(f"search_hotels 执行异常: {e}")
+        return {"success": False, "error": str(e), "city": city, "hotels": []}
+
+
 def _get_current_gps() -> dict:
     """读取当前 GPS 坐标：优先 LocationStore，降级 main._current_gps"""
     # 优先从 LocationStore 读取（线程安全，NavPanel 浏览器 GPS 写入）
@@ -750,16 +1023,50 @@ def start_navigation(destination: str, city: str = "") -> dict:
     启动导航到指定目的地。
     主力：免费 OSRM 路线 + Nominatim 地理编码（无需任何 API Key），含离线地标表降级。
     增强：高德深链（有 Key 时附上 amap_nav_url，可一键跳转高德 App）。
+
+    语义地点支持：destination 为"家"/"回家"/"home"/"公司"/"单位"时，
+    先查已保存地点；未定义则返回 needs_clarification 要求用户设置。
     """
+    # Step 0: 语义地点解析（家/公司等）
+    _SEMANTIC_MAP = {
+        "家": "home", "回家": "home", "home": "home", "我家": "home",
+        "公司": "company", "单位": "company", "company": "company",
+        "上班": "company", "去公司": "company",
+    }
+    dest_clean = destination.strip()
+    if dest_clean in _SEMANTIC_MAP:
+        label = _SEMANTIC_MAP[dest_clean]
+        try:
+            from modules.ai.memory import LongTermMemory
+            ltm = LongTermMemory()
+            saved = ltm.get_location(label)
+            ltm._conn.close()
+            if saved and saved.get("address"):
+                destination = saved["address"]
+                logger.info("语义地点解析: %s → %s", dest_clean, destination)
+            else:
+                friendly = "家" if label == "home" else "公司"
+                return {
+                    "success": False,
+                    "needs_clarification": True,
+                    "clarification_question": f"您还没有设置过「{friendly}」的地址。请告诉我您{friendly}的地址，比如「我家在北京市朝阳区XX路」，我会记住以后就能直接导航了。",
+                }
+        except Exception as e:
+            logger.warning("语义地点查询失败: %s", e)
+
     # Step 1: 获取起点坐标（无 GPS 时默认上海市中心）
     gps = _get_current_gps()
     from_lat = float(gps["lat"]) if gps and gps.get("lat") else 31.2304
     from_lon = float(gps["lon"]) if gps and gps.get("lon") else 121.4737
+    gps_source = gps.get("source", "fallback_shanghai") if gps else "fallback_shanghai"
 
     # Step 2: 用免费 NavigationService 规划路线（OSRM + Nominatim + 离线降级）
     from modules.ai.navigation_service import get_navigation_service
     nav = get_navigation_service()
     result = nav.plan(from_lat, from_lon, destination)
+    result["origin_source"] = gps_source
+    if gps_source == "fallback_shanghai":
+        result.setdefault("origin", "上海市中心（未获取到真实定位）")
 
     # Step 3: 高德深链增强（有 Key 时附上，可一键跳转 App）
     try:
@@ -776,179 +1083,117 @@ def start_navigation(destination: str, city: str = "") -> dict:
         pass
 
     return result
-def plan_trip(city: str, days: int = 1, preference: Optional[str] = None) -> dict:
-    """
-    生成结构化行程规划，借鉴 hello-agents trip-planner 数据模型。
+def plan_trip(
+    city: str,
+    days: int = 1,
+    preference: Optional[str] = None,
+    origin: str = "",
+    waypoints: Optional[list] = None,
+    forbidden_cities: Optional[list] = None,
+) -> dict:
+    """Generate a structured trip plan via the dedicated trip planner."""
+    logger.info(
+        "plan_trip: origin=%s, city=%s, waypoints=%s, forbidden_cities=%s, days=%s, preference=%s",
+        origin,
+        city,
+        waypoints,
+        forbidden_cities,
+        days,
+        preference,
+    )
+    try:
+        from modules.ai.trip_planner import get_trip_planner_agent
+        result = get_trip_planner_agent().plan_from_text(
+            query=f"{origin + '到' if origin else ''}{city}{days}日游",
+            city=city,
+            days=days,
+            preference=preference,
+            origin=origin,
+            waypoints=waypoints or [],
+            forbidden_cities=forbidden_cities or [],
+        )
+        trip = result.get("trip_plan") or {}
+        return {
+            "success": result.get("success", True),
+            "city": trip.get("city", city),
+            "days": trip.get("days", days),
+            "itinerary": trip.get("itinerary", []),
+            "budget": trip.get("budget", {}),
+            "weather": result.get("weather", {}),
+            "weather_info": trip.get("weather_info", []),
+            "attractions": [
+                attr
+                for day in trip.get("trip_schema", {}).get("days", [])
+                for attr in day.get("attractions", [])
+            ],
+            "summary": trip.get("summary", ""),
+            "trip_schema": result.get("trip_schema") or trip.get("trip_schema", {}),
+        }
+    except Exception as e:
+        logger.error("plan_trip failed: %s", e)
+        return {
+            "success": False,
+            "city": city,
+            "days": days,
+            "itinerary": [],
+            "budget": {},
+            "weather": {},
+            "attractions": [],
+            "summary": f"抱歉，无法为{city}生成行程规划",
+            "error": str(e),
+        }
 
-    包含：多日行程结构、预算估算（门票+餐饮+交通）、景点照片/评分/门票/游览时长、天气信息。
+
+def save_location(label: str, address: str) -> dict:
+    """
+    保存一个常用地点（如家、公司）到长期记忆。
+    保存后用户说"导航回家"即可自动导航到该地址。
 
     Args:
-        city: 目的地城市（如"天津"、"北京"）
-        days: 旅行天数（默认 1，限制 1-5）
-        preference: 偏好类型（历史文化/亲子/户外/美食/拍照打卡）
+        label: 地点标签 (home / company)
+        address: 详细地址
 
     Returns:
-        {
-            "success": bool, "city": str, "days": int,
-            "itinerary": [{"day": 1, "date": "第1天", "slots": [...]}],
-            "budget": {"total": int, "tickets": int, "meals": int, "transport": int, "per_day": int},
-            "weather": {...}, "attractions": [...], "summary": str
-        }
+        {"success": bool, ...}
     """
-    logger.info(f"plan_trip: city={city}, days={days}, preference={preference}")
-    days = max(1, min(days, 5))
+    try:
+        from modules.ai.memory import LongTermMemory
+        ltm = LongTermMemory()
+        ltm.set_location(label, address)
+        ltm._conn.close()
+        friendly = "家" if label == "home" else "公司"
+        return {"success": True, "message": f"已记住您的{friendly}地址：{address}"}
+    except Exception as e:
+        logger.error(f"save_location 失败: {e}")
+        return {"success": False, "error": str(e)}
 
-    # Step 1: 先查天气（决定景点搜索策略）
-    weather_result = get_weather(city=city)
-    weather_info = {}
-    weather_desc = ""
-    if weather_result.get("status") == "ok":
-        wdata = weather_result.get("data", {})
-        weather_desc = wdata.get("weather_desc", "")
-        weather_info = {
-            "city": wdata.get("city", city),
-            "temperature": wdata.get("temperature"),
-            "weather_desc": weather_desc,
-            "weather_emoji": wdata.get("weather_emoji", ""),
-            "humidity": wdata.get("humidity"),
-            "wind_speed": wdata.get("wind_speed"),
-            "driving_context": wdata.get("driving_context", ""),
-        }
 
-    # Step 2: 搜索景点（传入天气描述，雨天自动优先室内）
-    attr_result = search_attractions(city=city, weather=weather_desc, count=days * 3 + 2, preference=preference)
-    all_attractions = attr_result.get("attractions", [])
-    if not all_attractions:
-        return {
-            "success": False, "city": city, "days": days,
-            "error": attr_result.get("error", "未找到景点"),
-            "itinerary": [], "budget": {}, "summary": f"抱歉，无法为{city}生成行程规划",
-        }
-    weather_str = weather_info.get("weather_desc", "")
-    if weather_info.get("temperature") is not None:
-        weather_str += f" {weather_info['temperature']}°C"
+def get_saved_location(label: str) -> dict:
+    """
+    查询已保存的地点信息。
 
-    # Step 3: 按天数分配景点（每天 3 个）
-    attractions_per_day = 3
-    total_needed = days * attractions_per_day
-    if len(all_attractions) < total_needed:
-        while len(all_attractions) < total_needed:
-            all_attractions.extend(all_attractions[:total_needed - len(all_attractions)])
-    selected = all_attractions[:total_needed]
+    Args:
+        label: 地点标签 (home / company)
 
-    # Step 4: 构建每日行程 + 预算累计
-    itinerary = []
-    total_tickets = 0
-    total_meals = 0
-    total_transport = 0
-
-    for day_idx in range(days):
-        day_attractions = selected[day_idx * attractions_per_day:(day_idx + 1) * attractions_per_day]
-        slots = []
-
-        # 早餐
-        slots.append({"time": "08:00", "type": "meal", "title": "早餐",
-                      "desc": f"品尝{city}地道早餐", "cost": 30})
-        total_meals += 30
-
-        # 上午景点
-        if len(day_attractions) > 0:
-            attr = day_attractions[0]
-            ticket = attr.get("ticket_price", 0)
-            total_tickets += ticket
-            slots.append({
-                "time": "09:00", "type": "visit", "title": attr["name"],
-                "desc": f"{attr.get('category', '景点')} · 预计游览{attr.get('visit_duration', 120)}分钟 · 📍 {attr.get('address', '')}",
-                "address": attr.get("address", ""), "ticket_price": ticket,
-                "rating": attr.get("rating", 0), "photo_url": attr.get("photo_url", ""),
-                "visit_duration": attr.get("visit_duration", 120), "cost": ticket,
-            })
-
-        # 午餐
-        slots.append({"time": "12:00", "type": "meal", "title": "午餐",
-                      "desc": "游览途中就近用餐", "cost": 80})
-        total_meals += 80
-
-        # 下午景点 1
-        if len(day_attractions) > 1:
-            attr = day_attractions[1]
-            ticket = attr.get("ticket_price", 0)
-            total_tickets += ticket
-            slots.append({
-                "time": "14:00", "type": "visit", "title": attr["name"],
-                "desc": f"{attr.get('category', '景点')} · 预计游览{attr.get('visit_duration', 120)}分钟 · 📍 {attr.get('address', '')}",
-                "address": attr.get("address", ""), "ticket_price": ticket,
-                "rating": attr.get("rating", 0), "photo_url": attr.get("photo_url", ""),
-                "visit_duration": attr.get("visit_duration", 120), "cost": ticket,
-            })
-
-        # 下午景点 2
-        if len(day_attractions) > 2:
-            attr = day_attractions[2]
-            ticket = attr.get("ticket_price", 0)
-            total_tickets += ticket
-            slots.append({
-                "time": "16:30", "type": "visit", "title": attr["name"],
-                "desc": f"{attr.get('category', '景点')} · 预计游览{attr.get('visit_duration', 120)}分钟 · 📍 {attr.get('address', '')}",
-                "address": attr.get("address", ""), "ticket_price": ticket,
-                "rating": attr.get("rating", 0), "photo_url": attr.get("photo_url", ""),
-                "visit_duration": attr.get("visit_duration", 120), "cost": ticket,
-            })
-
-        # 交通
-        day_transport = 50
-        total_transport += day_transport
-        slots.append({"time": "18:30", "type": "transport", "title": "前往晚餐",
-                      "desc": f"驾车或公共交通，预计{day_transport}元", "cost": day_transport})
-
-        # 晚餐
-        slots.append({"time": "19:00", "type": "meal", "title": "晚餐",
-                      "desc": f"享受{city}特色美食", "cost": 100})
-        total_meals += 100
-
-        # 休息
-        slots.append({"time": "21:00", "type": "rest", "title": "休息",
-                      "desc": "结束一天的行程", "cost": 0})
-
-        itinerary.append({"day": day_idx + 1, "date": f"第{day_idx + 1}天", "slots": slots})
-
-    # Step 5: 计算预算
-    total_cost = total_tickets + total_meals + total_transport
-    budget = {
-        "total": total_cost,
-        "tickets": total_tickets,
-        "meals": total_meals,
-        "transport": total_transport,
-        "per_day": round(total_cost / days) if days > 0 else total_cost,
-    }
-
-    # Step 6: 生成摘要
-    weather_text = f"（{weather_str}）" if weather_str else ""
-    rain_warning = ""
-    weather_type = _classify_weather(weather_desc)
-    if weather_type == "rain":
-        indoor_count = sum(1 for a in selected if a.get("indoor"))
-        outdoor_count = len(selected) - indoor_count
-        if outdoor_count > 0:
-            rain_warning = f"今日有雨，已优先推荐{indoor_count}个室内景点，{outdoor_count}个户外景点建议携带雨具或调整至雨停时段。"
-
-    summary = (
-        f"{city}{days}日游{weather_text}："
-        f"共{len(selected)}个景点，"
-        f"预计总费用约{total_cost}元"
-        f"（门票{total_tickets}+餐饮{total_meals}+交通{total_transport}）。"
-    )
-    if rain_warning:
-        summary += rain_warning
-    if weather_info.get("driving_context"):
-        summary += weather_info["driving_context"]
-
-    return {
-        "success": True, "city": city, "days": days,
-        "itinerary": itinerary, "budget": budget,
-        "weather": weather_info, "attractions": selected,
-        "summary": summary,
-    }
+    Returns:
+        {"success": bool, "location": {...} or None}
+    """
+    try:
+        from modules.ai.memory import LongTermMemory
+        ltm = LongTermMemory()
+        saved = ltm.get_location(label)
+        ltm._conn.close()
+        if saved:
+            friendly = "家" if label == "home" else "公司"
+            return {"success": True, "location": saved,
+                    "message": f"您的{friendly}地址是：{saved['address']}"}
+        else:
+            friendly = "家" if label == "home" else "公司"
+            return {"success": True, "location": None,
+                    "message": f"您还没有设置过{friendly}的地址。请告诉我您{friendly}的地址，我会记住。"}
+    except Exception as e:
+        logger.error(f"get_saved_location 失败: {e}")
+        return {"success": False, "error": str(e)}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -961,11 +1206,15 @@ TOOL_EXECUTOR = {
     "control_music": control_music,
     "search_knowledge": search_knowledge,
     "get_weather": get_weather,
+    "get_weather_forecast": get_weather_forecast,
     "alert_driver": alert_driver,
     "ask_clarification": ask_clarification,
     "search_attractions": search_attractions,
+    "search_hotels": search_hotels,
     "start_navigation": start_navigation,
     "plan_trip": plan_trip,
+    "save_location": save_location,
+    "get_saved_location": get_saved_location,
 }
 
 

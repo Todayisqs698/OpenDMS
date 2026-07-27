@@ -26,10 +26,16 @@ Agent Orchestrator — 多 Agent 编排引擎
 
 import logging
 import time
+import concurrent.futures
+import threading
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, field
 
+from modules.ai.intent_guard import guard_intent, normalize_intent
+
 logger = logging.getLogger(__name__)
+
+PARALLEL_INTENT_TIMEOUT_SEC = 30.0
 
 
 # ═══════════════════════════════════════════════════════════
@@ -164,31 +170,86 @@ class ControlExecutor:
             r = httpx.post(f"{self._backend_base}/api/music/search",
                           json={"keyword": singer}, timeout=10)
             data = r.json()
-            songs = data.get("songs", [])  # /api/music/search 返回 {"status":"ok","songs":[...]}
+            songs = data.get("songs", []) or data.get("data", [])
             if songs:
                 first = songs[0]
-                httpx.post(f"{self._backend_base}/api/music/play",
+                pr = httpx.post(f"{self._backend_base}/api/music/play",
                           json={"song_id": first.get("id")}, timeout=5)
-                actions.append({"type": "music", "command": "play",
-                               "song": first.get("name", ""), "artist": singer})
-                return f"开始播放 {singer} 的《{first.get('name', '')}》"
+                pdata = pr.json()
+                if pdata.get("status") == "ok":
+                    actions.append({"type": "music", "command": "play",
+                                   "song": first.get("name", ""), "artist": singer})
+                    return f"开始播放 {singer} 的《{first.get('name', '')}》"
+                else:
+                    actions.append({"type": "music", "command": "play_failed"})
+                    return f"找到歌曲但播放失败：{pdata.get('message', '未知错误')}"
             actions.append({"type": "music", "command": "search_failed"})
             return f"没有找到 {singer} 的歌曲"
 
         if action == "play":
-            httpx.post(f"{self._backend_base}/api/music/play", timeout=5)
-            actions.append({"type": "music", "command": "play"})
-            return "开始播放音乐"
+            # 无 song_id：调用 pause 端点恢复当前播放（pause 是 toggle）
+            r = httpx.post(f"{self._backend_base}/api/music/pause", timeout=5)
+            data = r.json()
+            status = data.get("status", "")
+            state = data.get("data", {})
+            playing = state.get("playing") if isinstance(state, dict) else None
+            if status == "ok" and playing:
+                actions.append({"type": "music", "command": "play"})
+                return "开始播放音乐"
+            elif status == "needs_audio":
+                actions.append({"type": "music", "command": "play_failed"})
+                return "当前没有可播放的歌曲，请先搜索并选择歌曲"
+            elif status == "ok" and not playing:
+                # toggle 后变为暂停，再 toggle 一次恢复
+                httpx.post(f"{self._backend_base}/api/music/pause", timeout=5)
+                actions.append({"type": "music", "command": "play"})
+                return "开始播放音乐"
+            else:
+                actions.append({"type": "music", "command": "play_failed"})
+                return f"播放失败：{data.get('message', '未知错误')}"
 
         if action == "pause":
-            httpx.post(f"{self._backend_base}/api/music/pause", timeout=5)
-            actions.append({"type": "music", "command": "pause"})
-            return "音乐已暂停"
+            # First check current state to handle "already paused" gracefully
+            try:
+                state_r = httpx.get(f"{self._backend_base}/api/music/state", timeout=5)
+                state_data = state_r.json()
+                cur_state = state_data.get("data", {})
+                if isinstance(cur_state, dict) and not cur_state.get("playing"):
+                    actions.append({"type": "music", "command": "pause"})
+                    return "音乐已经是暂停状态"
+            except Exception:
+                pass
+            r = httpx.post(f"{self._backend_base}/api/music/pause", timeout=5)
+            data = r.json()
+            if data.get("status") == "ok":
+                actions.append({"type": "music", "command": "pause"})
+                state = data.get("data", {})
+                playing = state.get("playing") if isinstance(state, dict) else None
+                return "音乐已暂停" if not playing else "已恢复播放"
+            elif data.get("status") == "needs_audio":
+                actions.append({"type": "music", "command": "pause"})
+                return "当前没有在播放的音乐"
+            actions.append({"type": "music", "command": "pause_failed"})
+            return "暂停失败"
 
-        # 默认播放
-        httpx.post(f"{self._backend_base}/api/music/play", timeout=5)
-        actions.append({"type": "music", "command": "play"})
-        return "开始播放音乐"
+        # 默认播放：调用 pause 端点恢复当前播放
+        r = httpx.post(f"{self._backend_base}/api/music/pause", timeout=5)
+        data = r.json()
+        status = data.get("status", "")
+        state = data.get("data", {})
+        playing = state.get("playing") if isinstance(state, dict) else None
+        if status == "ok" and playing:
+            actions.append({"type": "music", "command": "play"})
+            return "开始播放音乐"
+        elif status == "needs_audio":
+            actions.append({"type": "music", "command": "play_failed"})
+            return "当前没有可播放的歌曲，请先搜索并选择歌曲"
+        elif status == "ok" and not playing:
+            httpx.post(f"{self._backend_base}/api/music/pause", timeout=5)
+            actions.append({"type": "music", "command": "play"})
+            return "开始播放音乐"
+        actions.append({"type": "music", "command": "play_failed"})
+        return f"播放失败：{data.get('message', '未知错误')}"
 
 
 # ═══════════════════════════════════════════════════════════
@@ -210,48 +271,68 @@ class AgentOrchestrator:
         self._analyze_agent = None
         self._recommend_agent = None
         self._intention_agent = None
+        self._lazy_lock = threading.Lock()
+        # 上轮行程规划的结构化参数（city/days/preference 等），
+        # 供下一轮意图识别复用，避免"重新规划"时 LLM 失忆重新询问城市。
+        self._last_trip_params: dict = {}
+        # 上轮工具结果摘要（如"推荐3个景点：外滩、东方明珠、豫园"）。
+        self._last_tool_summary: str = ""
+        # 上轮用户输入，供意图识别判断用户是否在"调整上轮"。
+        self._last_user_text: str = ""
 
     # ── 延迟加载 ──
 
     @property
     def control_executor(self):
         if self._control_executor is None:
-            self._control_executor = ControlExecutor()
+            with self._lazy_lock:
+                if self._control_executor is None:
+                    self._control_executor = ControlExecutor()
         return self._control_executor
 
     @property
     def react_agent(self):
         if self._react_agent is None:
-            from modules.ai.agent_graph import ReActAgent
-            self._react_agent = ReActAgent()
+            with self._lazy_lock:
+                if self._react_agent is None:
+                    from modules.ai.agent_graph import ReActAgent
+                    self._react_agent = ReActAgent()
         return self._react_agent
 
     @property
     def diagnose_agent(self):
         if self._diagnose_agent is None:
-            from modules.ai.agents.diagnose_agent import DiagnoseAgent
-            self._diagnose_agent = DiagnoseAgent()
+            with self._lazy_lock:
+                if self._diagnose_agent is None:
+                    from modules.ai.agents.diagnose_agent import DiagnoseAgent
+                    self._diagnose_agent = DiagnoseAgent()
         return self._diagnose_agent
 
     @property
     def analyze_agent(self):
         if self._analyze_agent is None:
-            from modules.ai.agents.analyze_agent import AnalyzeAgent
-            self._analyze_agent = AnalyzeAgent()
+            with self._lazy_lock:
+                if self._analyze_agent is None:
+                    from modules.ai.agents.analyze_agent import AnalyzeAgent
+                    self._analyze_agent = AnalyzeAgent()
         return self._analyze_agent
 
     @property
     def recommend_agent(self):
         if self._recommend_agent is None:
-            from modules.ai.agents.recommend_agent import RecommendAgent
-            self._recommend_agent = RecommendAgent()
+            with self._lazy_lock:
+                if self._recommend_agent is None:
+                    from modules.ai.agents.recommend_agent import RecommendAgent
+                    self._recommend_agent = RecommendAgent()
         return self._recommend_agent
 
     @property
     def intention_agent(self):
         if self._intention_agent is None:
-            from modules.ai.intention_agent import IntentionAgent
-            self._intention_agent = IntentionAgent()
+            with self._lazy_lock:
+                if self._intention_agent is None:
+                    from modules.ai.intention_agent import IntentionAgent
+                    self._intention_agent = IntentionAgent()
         return self._intention_agent
 
     # ── 主入口 ──
@@ -273,7 +354,12 @@ class AgentOrchestrator:
         ds = driver_state or {}
 
         # Step 1: 意图分解
-        plan = self.intention_agent.analyze(text, ds)
+        # 构建 conversation_context：从 Orchestrator 自身缓存 + react_agent.memory
+        # 提取上轮行程参数和工具结果，注入意图识别 prompt，
+        # 让 LLM 在"重新规划"/"换个方案"等调整场景下复用 city/days，
+        # 而不是从零询问"请问您想去哪个城市"。
+        conversation_context = self._build_conversation_context()
+        plan = self.intention_agent.analyze(text, ds, conversation_context=conversation_context)
         plan_dict = plan.to_dict()
 
         if callbacks and callbacks.get("on_intent"):
@@ -314,30 +400,14 @@ class AgentOrchestrator:
                 intent_plan=plan_dict,
             )
 
-        # Step 3: 按优先级执行各意图
-        results = []
+        # Step 3: 执行各意图。无依赖任务并行，组合推理/依赖任务保持顺序。
+        results = self._execute_intents(plan.intents, text, ds, callbacks)
         all_actions = []
-
-        for intent in plan.intents:
-            if callbacks and callbacks.get("on_step"):
-                callbacks["on_step"]({
-                    "intent": intent.id,
-                    "agent": intent.agent,
-                    "category": intent.category,
-                    "description": intent.description,
-                })
-
-            result = self._dispatch_intent(intent, text, ds)
-            results.append(result)
+        for result in results:
             all_actions.extend(result.actions)
 
-            if callbacks and callbacks.get("on_result"):
-                callbacks["on_result"]({
-                    "intent_id": intent.id,
-                    "agent": intent.agent,
-                    "success": result.success,
-                    "reply": result.reply_text,
-                })
+        # Step 3.5: 缓存本轮行程规划结果，供下一轮意图识别复用
+        self._capture_last_results(results, text)
 
         # Step 4: 聚合结果，生成统一回复
         overall_reply = self._aggregate_reply(results, plan.overall_summary)
@@ -351,6 +421,241 @@ class AgentOrchestrator:
             total_duration_ms=total_duration,
             intent_plan=plan_dict,
         )
+
+    def _build_conversation_context(self) -> str:
+        """构建注入意图识别 prompt 的对话上下文。
+
+        优先从 Orchestrator 自身缓存（_last_trip_params）提取，
+        因为行程规划走 recommend_agent，不经过 react_agent。
+        同时尝试 react_agent.memory.working 作为补充（用于 chitchat 场景）。
+        """
+        parts = []
+
+        # 1. Orchestrator 自身缓存的行程参数（主要来源）
+        if self._last_trip_params:
+            p = self._last_trip_params
+            trip_parts = []
+            if p.get("origin") and p.get("city"):
+                trip_parts.append(f"{p['origin']}→{p['city']}")
+            elif p.get("city"):
+                trip_parts.append(f"上次行程城市：{p['city']}")
+            if p.get("days"):
+                trip_parts.append(f"{p['days']}日游")
+            if p.get("preference"):
+                trip_parts.append(f"偏好「{p['preference']}」")
+            if trip_parts:
+                parts.append("上次行程参数（用户要求调整时请复用城市和天数，不要重新询问）：" + "，".join(trip_parts) + "。")
+
+        if self._last_tool_summary:
+            parts.append(f"上轮工具结果：{self._last_tool_summary}")
+
+        if self._last_user_text:
+            parts.append(f"上轮用户输入：{self._last_user_text[:80]}")
+
+        # 2. react_agent.memory.working（补充来源，用于 chitchat/control 场景）
+        try:
+            wm = self.react_agent.memory.working
+            trip_ctx = wm.get_trip_context_for_prompt()
+            if trip_ctx and not self._last_trip_params:
+                parts.append(trip_ctx)
+            recent = wm.get_messages_for_llm()[-2:]
+            for m in recent:
+                role = "用户" if m.get("role") == "user" else "助手"
+                content = str(m.get("content", ""))[:120]
+                if content:
+                    parts.append(f"上轮{role}：{content}")
+        except Exception:
+            pass
+
+        return "\n".join(parts) if parts else ""
+
+    def _capture_last_results(self, results: list, user_text: str) -> None:
+        """从执行结果中缓存行程规划参数，供下一轮意图识别复用。
+
+        行程规划走 recommend_agent → trip_planner，结果在 ExecutionResult.data 中。
+        这里提取 city/days/preference 等关键字段，避免下一轮 LLM 失忆。
+        """
+        self._last_user_text = user_text[:200]
+        for r in results:
+            if not r.success or not r.data:
+                continue
+            data = r.data
+            # trip_plan 类型
+            if data.get("type") == "trip_plan" or data.get("trip_plan"):
+                trip = data.get("trip_plan") or data
+                if isinstance(trip, dict) and trip.get("success", True) is not False:
+                    params = {
+                        "city": trip.get("city", data.get("city", "")),
+                        "days": trip.get("days", data.get("days")),
+                        "preference": trip.get("preferences") or trip.get("preference") or data.get("preference", ""),
+                        "origin": trip.get("origin", data.get("origin", "")),
+                        "waypoints": trip.get("waypoints", []),
+                        "forbidden_cities": trip.get("forbidden_cities", []),
+                    }
+                    # 只在有 city 时才缓存
+                    if params["city"]:
+                        # preference 可能是 list，归一化为字符串
+                        pref = params["preference"]
+                        if isinstance(pref, (list, tuple)):
+                            params["preference"] = "、".join(str(x) for x in pref if x)
+                        self._last_trip_params = params
+                        # 生成摘要
+                        summary_parts = [params["city"]]
+                        if params["days"]:
+                            summary_parts.append(f"{params['days']}日游")
+                        budget = trip.get("budget") or data.get("budget")
+                        if isinstance(budget, dict) and budget.get("total"):
+                            summary_parts.append(f"预算¥{budget['total']}")
+                        self._last_tool_summary = "，".join(summary_parts)
+                        logger.info("Orchestrator 已缓存行程参数：%s", params)
+                    break
+            # attractions 类型
+            elif data.get("type") == "attractions" or data.get("attractions"):
+                attrs = data.get("attractions") or []
+                if attrs:
+                    names = [a.get("name", "") for a in attrs[:5] if a.get("name")]
+                    if names:
+                        self._last_tool_summary = f"推荐{len(attrs)}个景点：" + "、".join(names)
+            # navigation 类型 — 补全之前缺失的导航结果捕获
+            elif data.get("type") == "navigation" or data.get("destination"):
+                dest = data.get("destination", "")
+                dist = data.get("distance_km", "")
+                dur = data.get("duration_min", "")
+                parts = []
+                if dest:
+                    parts.append(f"到{dest}")
+                if dist != "":
+                    parts.append(f"{dist}公里")
+                if dur != "":
+                    parts.append(f"{dur}分钟")
+                if parts:
+                    self._last_tool_summary = "导航" + "，".join(parts)
+                    logger.info("Orchestrator 已缓存导航结果: %s", self._last_tool_summary)
+
+    def _execute_intents(self, intents: list, text: str, driver_state: dict,
+                         callbacks: dict = None) -> List[ExecutionResult]:
+        """按依赖关系执行 intent：安全/依赖/组合任务串行，互不依赖任务并行。"""
+        if not intents:
+            return []
+
+        ordered = sorted(intents, key=lambda i: i.priority)
+        if len(ordered) == 1 or not self._can_parallelize(ordered):
+            return [self._execute_one_intent(intent, text, driver_state, callbacks)
+                    for intent in ordered]
+
+        max_workers = min(len(ordered), 4)
+        logger.info(
+            "AgentOrchestrator: parallel dispatch %d intents: %s",
+            len(ordered), [i.category for i in ordered],
+        )
+
+        result_by_id = {}
+        started_at = {intent.id: time.time() for intent in ordered}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            future_map = {
+                pool.submit(self._execute_one_intent, intent, text, driver_state, callbacks): intent
+                for intent in ordered
+            }
+            done, pending = concurrent.futures.wait(
+                future_map,
+                timeout=PARALLEL_INTENT_TIMEOUT_SEC,
+                return_when=concurrent.futures.ALL_COMPLETED,
+            )
+
+            for fut in done:
+                intent = future_map[fut]
+                try:
+                    result_by_id[intent.id] = fut.result()
+                except Exception as e:
+                    logger.exception("Intent execution crashed: %s", intent.id)
+                    result_by_id[intent.id] = ExecutionResult(
+                        intent_id=intent.id,
+                        intent_category=intent.category,
+                        agent_name=intent.agent,
+                        success=False,
+                        error=str(e),
+                        duration_ms=(time.time() - started_at[intent.id]) * 1000,
+                    )
+
+            for fut in pending:
+                intent = future_map[fut]
+                fut.cancel()
+                logger.warning("Intent execution timed out: %s", intent.id)
+                result_by_id[intent.id] = ExecutionResult(
+                    intent_id=intent.id,
+                    intent_category=intent.category,
+                    agent_name=intent.agent,
+                    success=False,
+                    error=f"intent execution timed out after {PARALLEL_INTENT_TIMEOUT_SEC:.0f}s",
+                    duration_ms=(time.time() - started_at[intent.id]) * 1000,
+                )
+
+        return [result_by_id[i.id] for i in ordered if i.id in result_by_id]
+
+    def _execute_one_intent(self, intent, text: str, driver_state: dict,
+                            callbacks: dict = None) -> ExecutionResult:
+        normalized = normalize_intent(intent)
+        if callbacks and callbacks.get("on_step"):
+            callbacks["on_step"]({
+                "intent": normalized.id,
+                "agent": normalized.agent,
+                "category": normalized.category,
+                "description": normalized.description,
+                "mode": normalized.mode,
+                "confidence": normalized.confidence,
+            })
+
+        decision = guard_intent(normalized, driver_state)
+        if not decision.allowed:
+            result = ExecutionResult(
+                intent_id=normalized.id,
+                intent_category=normalized.category,
+                agent_name=normalized.agent,
+                success=True,
+                reply_text=decision.message,
+                actions=[],
+                data={
+                    "type": "guard_decision",
+                    "mode": decision.mode,
+                    "reason": decision.reason,
+                    "missing_slots": decision.missing_slots,
+                    "intent": {
+                        "category": normalized.category,
+                        "params": normalized.params,
+                        "confidence": normalized.confidence,
+                    },
+                },
+            )
+        else:
+            result = self._dispatch_intent(normalized, text, driver_state)
+
+        if callbacks and callbacks.get("on_result"):
+            callbacks["on_result"]({
+                "intent_id": normalized.id,
+                "agent": normalized.agent,
+                "success": result.success,
+                "reply": result.reply_text,
+            })
+
+        return result
+
+    def _can_parallelize(self, intents: list) -> bool:
+        """判断当前计划是否适合并行执行。"""
+        if len(intents) < 2:
+            return False
+
+        # ReAct 通常是组合推理/工具循环，可能会自行编排多个动作；避免与外层并行重入。
+        if any(i.agent == "react_agent" for i in intents):
+            return False
+
+        if any(getattr(i, "params", {}).get("depends_on") or
+               getattr(i, "metadata", {}).get("depends_on") for i in intents):
+            return False
+
+        # 多个车控/音乐控制可能修改同一状态，保持顺序更可预期。
+        mutating_categories = {"ac_control", "music_control", "fatigue_assist"}
+        mutating_count = sum(1 for i in intents if i.category in mutating_categories)
+        return mutating_count <= 1
 
     # ── 意图分发 ──
 
@@ -488,6 +793,36 @@ class AgentOrchestrator:
             })
 
             duration = (time.time() - start) * 1000
+
+            # ── 关键修复：将本轮对话和结果写入 WorkingMemory ──
+            # RecommendAgent 不经过 ReActAgent.chat()，所以 WorkingMemory
+            # 不会被自动更新。下一轮 ReActAgent 就会完全失忆。
+            # 这里手动写入，让后续轮次能看到上下文。
+            try:
+                wm = self.react_agent.memory.working
+                wm.add_message("user", text)
+                reply = rec_result.get("reply", "")
+                if reply:
+                    wm.add_message("assistant", reply)
+                # 缓存导航结果摘要到 WorkingMemory
+                rec_type = rec_result.get("type", category)
+                if rec_type == "navigation" or rec_result.get("destination"):
+                    dest = rec_result.get("destination", "")
+                    dist = rec_result.get("distance_km", "")
+                    dur = rec_result.get("duration_min", "")
+                    parts = []
+                    if dest:
+                        parts.append(f"到{dest}")
+                    if dist != "":
+                        parts.append(f"{dist}km")
+                    if dur != "":
+                        parts.append(f"{dur}分钟")
+                    summary = " ".join(parts) if parts else "导航已完成"
+                    wm.set_last_tool_result("start_navigation", summary)
+                    logger.info("RecommendAgent 导航结果已写入 WorkingMemory: %s", summary)
+            except Exception as e:
+                logger.warning("写入 WorkingMemory 失败（非致命）: %s", e)
+
             return ExecutionResult(
                 intent_id="recommend_1",
                 intent_category=category,
