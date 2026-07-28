@@ -162,8 +162,45 @@ class ControlExecutor:
         """执行音乐控制。"""
         import httpx
 
+        def playable(state: dict) -> bool:
+            if not isinstance(state, dict):
+                return False
+            song = state.get("current_song") or {}
+            return bool(state.get("playing") and isinstance(song, dict) and song.get("url"))
+
+        def apply_volume(vol: int | None, vol_action: str | None) -> str:
+            """应用音量调节，返回描述文本。先获取当前音量，再根据参数调整。"""
+            vol_msg = ""
+            try:
+                # 获取当前音量
+                sr = httpx.get(f"{self._backend_base}/api/music/state", timeout=5)
+                cur = sr.json().get("data", {}).get("volume", 50)
+                if vol is not None:
+                    target = max(0, min(int(vol), 100))
+                elif vol_action == "up":
+                    target = min(cur + 15, 100)
+                elif vol_action == "down":
+                    target = max(cur - 15, 0)
+                else:
+                    return vol_msg
+                httpx.post(f"{self._backend_base}/api/music/volume",
+                          json={"volume": target}, timeout=5)
+                actions.append({"type": "music", "command": "volume", "volume": target})
+                if vol_action == "down":
+                    vol_msg = f"音量已调低至 {target}"
+                elif vol_action == "up":
+                    vol_msg = f"音量已调高至 {target}"
+                elif vol is not None:
+                    vol_msg = f"音量已设为 {target}"
+            except Exception:
+                pass
+            return vol_msg
+
         action = params.get("action", "")
         singer = params.get("singer", "")
+        vol_param = params.get("volume")
+        vol_action = params.get("volume_action")
+        vol_msg = apply_volume(vol_param, vol_action)
 
         if singer and action == "play":
             # 搜索并播放
@@ -176,10 +213,12 @@ class ControlExecutor:
                 pr = httpx.post(f"{self._backend_base}/api/music/play",
                           json={"song_id": first.get("id")}, timeout=5)
                 pdata = pr.json()
-                if pdata.get("status") == "ok":
+                state = pdata.get("data", {})
+                if pdata.get("status") == "ok" and playable(state):
                     actions.append({"type": "music", "command": "play",
                                    "song": first.get("name", ""), "artist": singer})
-                    return f"开始播放 {singer} 的《{first.get('name', '')}》"
+                    prefix = vol_msg + "，" if vol_msg else ""
+                    return f"{prefix}开始播放 {singer} 的《{first.get('name', '')}》"
                 else:
                     actions.append({"type": "music", "command": "play_failed"})
                     return f"找到歌曲但播放失败：{pdata.get('message', '未知错误')}"
@@ -187,23 +226,37 @@ class ControlExecutor:
             return f"没有找到 {singer} 的歌曲"
 
         if action == "play":
-            # 无 song_id：调用 pause 端点恢复当前播放（pause 是 toggle）
+            # 无指定歌手：先尝试调用 pause 端点恢复当前播放（pause 是 toggle）
             r = httpx.post(f"{self._backend_base}/api/music/pause", timeout=5)
             data = r.json()
             status = data.get("status", "")
             state = data.get("data", {})
-            playing = state.get("playing") if isinstance(state, dict) else None
-            if status == "ok" and playing:
+            if status == "ok" and playable(state):
                 actions.append({"type": "music", "command": "play"})
-                return "开始播放音乐"
-            elif status == "needs_audio":
+                prefix = vol_msg + "，" if vol_msg else ""
+                return f"{prefix}开始播放音乐"
+            elif status == "needs_audio" or (status == "ok" and not state.get("playing")):
+                # 没有可播放的歌曲 → 自动搜索热门歌曲并播放第一首
+                try:
+                    sr = httpx.post(f"{self._backend_base}/api/music/search",
+                                    json={"keyword": "热门"}, timeout=10)
+                    songs = sr.json().get("songs", []) or sr.json().get("data", [])
+                    if songs:
+                        first = songs[0]
+                        pr = httpx.post(f"{self._backend_base}/api/music/play",
+                                        json={"song_id": first.get("id")}, timeout=5)
+                        pdata = pr.json()
+                        pstate = pdata.get("data", {})
+                        if pdata.get("status") == "ok" and playable(pstate):
+                            actions.append({"type": "music", "command": "play",
+                                           "song": first.get("name", ""),
+                                           "artist": first.get("artist", "")})
+                            prefix = vol_msg + "，" if vol_msg else ""
+                            return f"{prefix}为您播放《{first.get('name', '')}》"
+                except Exception:
+                    pass
                 actions.append({"type": "music", "command": "play_failed"})
-                return "当前没有可播放的歌曲，请先搜索并选择歌曲"
-            elif status == "ok" and not playing:
-                # toggle 后变为暂停，再 toggle 一次恢复
-                httpx.post(f"{self._backend_base}/api/music/pause", timeout=5)
-                actions.append({"type": "music", "command": "play"})
-                return "开始播放音乐"
+                return vol_msg or "当前没有可播放的歌曲，请告诉我您想听什么？"
             else:
                 actions.append({"type": "music", "command": "play_failed"})
                 return f"播放失败：{data.get('message', '未知错误')}"
@@ -232,22 +285,40 @@ class ControlExecutor:
             actions.append({"type": "music", "command": "pause_failed"})
             return "暂停失败"
 
-        # 默认播放：调用 pause 端点恢复当前播放
+        # 纯音量指令（没有 play/pause 动作）
+        if not action and vol_msg:
+            return vol_msg
+
+        # 默认播放：先尝试恢复当前播放
         r = httpx.post(f"{self._backend_base}/api/music/pause", timeout=5)
         data = r.json()
         status = data.get("status", "")
         state = data.get("data", {})
         playing = state.get("playing") if isinstance(state, dict) else None
-        if status == "ok" and playing:
+        if status == "ok" and playable(state):
             actions.append({"type": "music", "command": "play"})
             return "开始播放音乐"
-        elif status == "needs_audio":
+        elif status == "needs_audio" or (status == "ok" and not playing):
+            # 没有可播放的歌曲 → 自动搜索热门歌曲并播放第一首
+            try:
+                sr = httpx.post(f"{self._backend_base}/api/music/search",
+                                json={"keyword": "热门"}, timeout=10)
+                songs = sr.json().get("songs", []) or sr.json().get("data", [])
+                if songs:
+                    first = songs[0]
+                    pr = httpx.post(f"{self._backend_base}/api/music/play",
+                                    json={"song_id": first.get("id")}, timeout=5)
+                    pdata = pr.json()
+                    pstate = pdata.get("data", {})
+                    if pdata.get("status") == "ok" and playable(pstate):
+                        actions.append({"type": "music", "command": "play",
+                                       "song": first.get("name", ""),
+                                       "artist": first.get("artist", "")})
+                        return f"为您播放《{first.get('name', '')}》"
+            except Exception:
+                pass
             actions.append({"type": "music", "command": "play_failed"})
-            return "当前没有可播放的歌曲，请先搜索并选择歌曲"
-        elif status == "ok" and not playing:
-            httpx.post(f"{self._backend_base}/api/music/pause", timeout=5)
-            actions.append({"type": "music", "command": "play"})
-            return "开始播放音乐"
+            return "当前没有可播放的歌曲，请告诉我您想听什么？"
         actions.append({"type": "music", "command": "play_failed"})
         return f"播放失败：{data.get('message', '未知错误')}"
 
@@ -794,34 +865,7 @@ class AgentOrchestrator:
 
             duration = (time.time() - start) * 1000
 
-            # ── 关键修复：将本轮对话和结果写入 WorkingMemory ──
-            # RecommendAgent 不经过 ReActAgent.chat()，所以 WorkingMemory
-            # 不会被自动更新。下一轮 ReActAgent 就会完全失忆。
-            # 这里手动写入，让后续轮次能看到上下文。
-            try:
-                wm = self.react_agent.memory.working
-                wm.add_message("user", text)
-                reply = rec_result.get("reply", "")
-                if reply:
-                    wm.add_message("assistant", reply)
-                # 缓存导航结果摘要到 WorkingMemory
-                rec_type = rec_result.get("type", category)
-                if rec_type == "navigation" or rec_result.get("destination"):
-                    dest = rec_result.get("destination", "")
-                    dist = rec_result.get("distance_km", "")
-                    dur = rec_result.get("duration_min", "")
-                    parts = []
-                    if dest:
-                        parts.append(f"到{dest}")
-                    if dist != "":
-                        parts.append(f"{dist}km")
-                    if dur != "":
-                        parts.append(f"{dur}分钟")
-                    summary = " ".join(parts) if parts else "导航已完成"
-                    wm.set_last_tool_result("start_navigation", summary)
-                    logger.info("RecommendAgent 导航结果已写入 WorkingMemory: %s", summary)
-            except Exception as e:
-                logger.warning("写入 WorkingMemory 失败（非致命）: %s", e)
+            self._remember_recommend_result(category, text, rec_result)
 
             return ExecutionResult(
                 intent_id="recommend_1",
@@ -846,6 +890,55 @@ class AgentOrchestrator:
                 error=str(e),
                 duration_ms=duration,
             )
+
+    def _remember_recommend_result(self, category: str, text: str, rec_result: dict) -> None:
+        """Persist non-ReAct recommendation results into shared working memory."""
+        try:
+            wm = self.react_agent.memory.working
+            wm.add_message("user", text)
+            reply = rec_result.get("reply", "")
+            if reply:
+                wm.add_message("assistant", reply)
+
+            rec_type = rec_result.get("type", category)
+            if rec_type == "navigation" or rec_result.get("nav_data") or rec_result.get("destination"):
+                nav = rec_result.get("nav_data") or rec_result
+                parts = []
+                if nav.get("destination"):
+                    parts.append(f"到{nav['destination']}")
+                if nav.get("distance_km") not in (None, ""):
+                    parts.append(f"{nav['distance_km']}km")
+                if nav.get("duration_min") not in (None, ""):
+                    parts.append(f"{nav['duration_min']}分钟")
+                wm.set_last_tool_result("start_navigation", " ".join(parts) or "导航已完成")
+                return
+
+            if rec_type == "weather" or rec_result.get("weather"):
+                weather = rec_result.get("weather") or {}
+                city = weather.get("city") or rec_result.get("city") or ""
+                desc = weather.get("weather_desc") or weather.get("weather") or ""
+                temp = weather.get("temperature")
+                summary = f"{city}天气 {desc}".strip()
+                if temp is not None:
+                    summary += f" {temp}°C"
+                wm.set_last_tool_result("get_weather", summary or "天气查询已完成")
+                return
+
+            if rec_type == "attractions" or rec_result.get("attractions"):
+                attrs = rec_result.get("attractions") or []
+                names = [a.get("name", "") for a in attrs[:5] if isinstance(a, dict) and a.get("name")]
+                summary = "推荐景点：" + "、".join(names) if names else "景点推荐已完成"
+                wm.set_last_tool_result("search_attractions", summary)
+                return
+
+            if rec_type == "trip_plan" or rec_result.get("trip_plan"):
+                trip = rec_result.get("trip_plan") or rec_result
+                city = trip.get("city", "")
+                days = trip.get("days", "")
+                summary = trip.get("summary", "")
+                wm.set_last_tool_result("plan_trip", f"{city}{days}日游 {summary}".strip())
+        except Exception as e:
+            logger.warning("写入 WorkingMemory 失败（非致命）: %s", e)
 
     # ── 结果聚合 ──
 

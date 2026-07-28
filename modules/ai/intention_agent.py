@@ -98,7 +98,8 @@ RULE_BASED_PATTERNS = {
         "patterns": [
             r"空调|冷气|暖气|暖风|温度|制冷|制热|风速|风量",
             r"开.*空调|关.*空调|空调.*开|空调.*关",
-            r"调[高低]|温度[升降]|再[高低冷热]一点",
+            r"调[高低]\s*(?:空调|温度|冷气|暖气|风速|风量)|(?:空调|温度|冷气|暖气|风速|风量)\s*调[高低]",
+            r"温度[升降]",
             r"\d{1,2}\s*(度|°|℃)",
         ],
         "agent": "control_executor",
@@ -150,8 +151,10 @@ RULE_BASED_PATTERNS = {
     },
     "trip_plan": {
         "patterns": [
-            r"一日游|几日游|多日游|行程|旅游|旅行|出游|游玩",
+            r"[一两三四五六七八九十\d]{1,2}日游|一日游|几日游|多日游|行程|旅游|旅行|出游|游玩",
             r"计划.*去|规划.*去|安排.*去|推荐.*游|推荐.*玩",
+            r"(?:帮我|帮我|请|给.*)(?:规划|计划|安排|推荐).*(?:游|玩|行程|攻略|路线)",
+            r"要去.*玩|想去.*玩|带.*去.*玩",
         ],
         "agent": "recommend_agent",
         "priority": 3,
@@ -219,6 +222,16 @@ def rule_based_intent_detection(text: str) -> List[IntentItem]:
                         extracted_params["action"] = "pause"
                     elif re.search(r"播放|放|来|听", text):
                         extracted_params["action"] = "play"
+                    # 音量识别
+                    vol_val_match = re.search(r"(?:音量|声音).*?(\d{1,3})|(\d{1,3})\s*[,，]?\s*(?:音量|声音)", text)
+                    if vol_val_match:
+                        val = vol_val_match.group(1) or vol_val_match.group(2)
+                        extracted_params["volume"] = int(val)
+                    if re.search(r"调[高低]|音量[高低]|声音[大小]|音量调|声音调|调节音量|调节声音", text):
+                        if re.search(r"调高|增大|提高|大[一]?点|响[一]?点|音量高|声音大|音量.*大|声音.*大", text):
+                            extracted_params["volume_action"] = "up"
+                        elif re.search(r"调低|降低|减小|小[一]?点|轻[一]?点|音量低|声音小|音量.*小|声音.*小|调小", text):
+                            extracted_params["volume_action"] = "down"
                 elif category == "location_management":
                     # 区分保存 vs 查询
                     if re.search(r"家在哪|家.*哪里|你.*定义.*家|公司的地址.*什么|公司.*在哪", text):
@@ -269,6 +282,17 @@ def rule_based_intent_detection(text: str) -> List[IntentItem]:
 
     # 按优先级排序（数字越小越先）
     detected.sort(key=lambda x: x.priority)
+
+    # 去重后处理：trip_plan 涵盖酒店/景点/天气，移除重叠的低优先级意图
+    categories = {i.category for i in detected}
+    if "trip_plan" in categories:
+        # trip_plan 内部会处理酒店搜索和景点推荐，不需要额外拆分
+        subsume = {"attractions", "weather"}
+        if "attractions" in categories or "weather" in categories:
+            detected = [i for i in detected if i.category not in subsume]
+            logger.info("规则匹配后处理：trip_plan 涵盖 %s，已移除重叠意图",
+                       subsume & categories)
+
     return detected
 
 
@@ -277,7 +301,7 @@ def _rule_intent_is_actionable(category: str, params: dict, confidence: float) -
     if category == "navigation":
         return bool(params.get("destination")) and confidence >= 0.72
     if category == "music_control":
-        return bool(params.get("action") or params.get("singer")) and confidence >= 0.78
+        return bool(params.get("action") or params.get("singer") or params.get("volume_action") or "volume" in params) and confidence >= 0.78
     if category == "ac_control":
         return bool(params.get("action") or "temperature" in params) and confidence >= 0.78
     if category == "location_management":
@@ -294,7 +318,7 @@ def _param_completeness(category: str, params: dict) -> float:
     if category == "ac_control":
         return 1.0 if params.get("action") or "temperature" in params else 0.55
     if category == "music_control":
-        return 1.0 if params.get("action") or params.get("singer") else 0.55
+        return 1.0 if params.get("action") or params.get("singer") or params.get("volume_action") or "volume" in params else 0.55
     if category == "weather":
         return 0.75 if params.get("city") else 0.65
     if category == "location_management":
@@ -357,13 +381,20 @@ def _generate_description(category: str, params: dict, text: str) -> str:
             return f"空调温度调节至 {params['temperature']} 度"
         return "空调控制"
     if category == "music_control":
+        desc_parts = []
+        if params.get("volume_action") == "down":
+            desc_parts.append("调低音量")
+        elif params.get("volume_action") == "up":
+            desc_parts.append("调高音量")
+        elif "volume" in params:
+            desc_parts.append(f"音量设为{params['volume']}")
         if "singer" in params:
-            return f"播放 {params['singer']} 的歌曲"
-        if params.get("action") == "play":
-            return "播放音乐"
-        if params.get("action") == "pause":
-            return "暂停音乐"
-        return "音乐控制"
+            desc_parts.append(f"播放 {params['singer']} 的歌曲")
+        elif params.get("action") == "play":
+            desc_parts.append("播放音乐")
+        elif params.get("action") == "pause":
+            desc_parts.append("暂停音乐")
+        return "，".join(desc_parts) if desc_parts else "音乐控制"
     if category == "fatigue_assist":
         return "疲劳辅助：需要提神"
     if category == "diagnosis":

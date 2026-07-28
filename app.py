@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 # ── AI 决策层（始终可用）──
 from modules.ai.edge_cloud_router import get_router
-from modules.ai.langgraph_orchestrator import Orchestrator
+from modules.ai.langgraph_orchestrator import Orchestrator as LegacyMultimodalOrchestrator
 from modules.ai.local_decision_engine import decide_locally
 from modules.ai.fallback_handler import handle_fallback
 
@@ -104,7 +104,7 @@ class EdgeGuardApp:
 
         # AI 决策层
         self.router = get_router()
-        self.orchestrator = Orchestrator()
+        self.orchestrator = LegacyMultimodalOrchestrator()
 
         # 统计
         self.stats = {
@@ -131,7 +131,7 @@ class EdgeGuardApp:
         logger.info("=" * 50)
         logger.info("EdgeGuard 初始化完成")
         logger.info(f"  感知层: {'可用' if _perception_available else '不可用（纯AI模式）'}")
-        logger.info(f"  决策层: LangGraph 三 Agent + 边缘-云端混合路由")
+        logger.info(f"  决策层: 统一 Agent API + legacy 多模态感知路由")
         logger.info(f"  离线模式: {'已激活' if self.router.is_offline() else '正常'}")
         logger.info("=" * 50)
 

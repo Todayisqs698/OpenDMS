@@ -24,10 +24,10 @@
 
         <!-- ④ 中央地图区 -->
         <section v-show="panel === 'trip'" class="min-w-0 flex-1 p-3">
-          <TripPlanView :trip-plan="liveTripPlan" />
+          <TripPlanView :trip-plan="liveTripPlan" @navigate="onTripNavigate" />
         </section>
         <section v-show="panel !== 'trip'" class="min-w-0 flex-1 p-3">
-          <MapArea :nav="navDisplay" :camera-ready="cameraReady" />
+          <MapArea :nav="navDisplay" :camera-ready="cameraReady" :visible="panel !== 'trip'" />
         </section>
 
         <!-- ⑤ 右侧 AI 面板（可折叠） -->
@@ -161,6 +161,57 @@ watch(wsNavInfo, (nav) => {
     navDisplay.value = { ...navDisplay.value, ...nav }
   }
 })
+
+// ── 行程规划联动出行面板 ──
+// TripPlanView 切换天数时 emit navigate 事件，
+// 这里调用后端 /api/navigation/route 规划从当前位置到目的地的完整驾车路线，
+// 地图上会显示起点→终点的蓝色路线和标记，而非仅一个终点。
+async function onTripNavigate(payload: { destination: string; day: number }) {
+  // 不提前设置 destination，避免触发 MapArea 的 geocode 降级逻辑，
+  // 导致单点标记覆盖完整路线。等路线数据返回后一次性设置全部字段。
+  navDisplay.value = {
+    ...navDisplay.value,
+    nextTurn: `Day ${payload.day} 正在规划路线…`,
+  }
+
+  try {
+    const r = await fetch('/api/navigation/route', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destination: payload.destination }),
+    })
+    const data = await r.json()
+    if (data.success) {
+      navDisplay.value = {
+        ...navDisplay.value,
+        destination: data.destination || payload.destination,
+        destinationCoords: data.destination_coords || null,
+        originCoords: data.origin_coords || null,
+        geometry: data.geometry || [],
+        etaMin: Math.round(data.duration_min || 0),
+        distanceKm: data.distance_km || 0,
+        nextTurn: data.route_summary || `Day ${payload.day} 行程目的地`,
+        steps: data.steps || [],
+        routeSource: data.source || '',
+        coordinateSystem: data.coordinate_system || '',
+        originSource: data.origin_source || '',
+      }
+    } else {
+      // 路线规划失败时才设置 destination，降级为单点显示
+      navDisplay.value = {
+        ...navDisplay.value,
+        destination: payload.destination,
+        nextTurn: data.route_summary || `Day ${payload.day} 行程目的地`,
+      }
+    }
+  } catch {
+    navDisplay.value = {
+      ...navDisplay.value,
+      destination: payload.destination,
+      nextTurn: `Day ${payload.day} 行程目的地`,
+    }
+  }
+}
 
 // ── Alert callback from camera ──
 let lastDistractionTime = 0

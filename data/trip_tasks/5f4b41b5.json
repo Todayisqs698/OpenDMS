@@ -1,0 +1,689 @@
+{
+  "task_id": "5f4b41b5",
+  "status": "completed",
+  "stage": "completed",
+  "progress": 100,
+  "message": "旅行计划生成成功",
+  "result": {
+    "success": true,
+    "type": "trip_plan",
+    "reply": "行程规划已显示在中控屏上咯！杭州2日游，天气多云，每日安排2-3个目的地，预计总费用约1320元。预算约¥1320元～",
+    "weather": {
+      "date": "2026-07-27",
+      "day_weather": "多云",
+      "night_weather": "多云",
+      "day_temp": "37",
+      "night_temp": "28",
+      "wind_direction": "东南",
+      "wind_power": "1-3",
+      "source": "amap_forecast",
+      "note": "高德逐日天气预报"
+    },
+    "trip_plan": {
+      "city": "杭州",
+      "origin": "",
+      "waypoints": [],
+      "forbidden_cities": [],
+      "route_summary": "杭州2日游",
+      "days": 2,
+      "date": "2026-07-28",
+      "start_date": "2026-07-28",
+      "end_date": "2026-07-29",
+      "summary": "杭州2日游，天气多云，每日安排2-3个目的地，预计总费用约1320元。",
+      "budget": {
+        "total": 1320,
+        "tickets": 0,
+        "meals": 420,
+        "transport": 100,
+        "hotels": 800,
+        "per_day": 660
+      },
+      "itinerary": [
+        {
+          "day": 1,
+          "date": "2026-07-28",
+          "hotel": {
+            "name": "鑫隆商务酒店(萧绍路)",
+            "address": "萧绍路1007号",
+            "location": {
+              "longitude": 120.277285,
+              "latitude": 30.16464
+            },
+            "price_range": "",
+            "rating": "4.0",
+            "distance": "",
+            "type": "住宿服务;宾馆酒店;宾馆酒店",
+            "estimated_cost": 400,
+            "source": "amap",
+            "route_city": "杭州"
+          },
+          "hotel_source": "amap",
+          "slots": [
+            {
+              "time": "08:00",
+              "type": "meal",
+              "title": "当地特色早餐",
+              "desc": "品尝杭州地道早餐",
+              "address": "",
+              "cost": 30
+            },
+            {
+              "time": "09:00",
+              "type": "visit",
+              "title": "灵隐寺",
+              "desc": "景点",
+              "address": "法云弄1号",
+              "ticket_price": 0,
+              "rating": 4.8,
+              "photo_url": "http://store.is.autonavi.com/showpic/4aa0a6a1b6ee72c9833441f363cbb43a",
+              "visit_duration": 120,
+              "cost": 0,
+              "source": "amap",
+              "reservation_required": false,
+              "reservation_tips": ""
+            },
+            {
+              "time": "11:30",
+              "type": "visit",
+              "title": "济公殿",
+              "desc": "景点",
+              "address": "灵隐路法云弄1号灵隐景区东北角",
+              "ticket_price": 0,
+              "rating": 4.2,
+              "photo_url": "https://aos-comment.amap.com/B0FFFWXTX3/comment/content_media_external_file_36607_ss__1770384127595_62720804.jpg",
+              "visit_duration": 120,
+              "cost": 0,
+              "source": "amap",
+              "reservation_required": false,
+              "reservation_tips": ""
+            },
+            {
+              "time": "14:00",
+              "type": "meal",
+              "title": "午餐",
+              "desc": "游览途中就近用餐",
+              "address": "",
+              "cost": 80
+            },
+            {
+              "time": "15:00",
+              "type": "visit",
+              "title": "灵隐寺-天王殿",
+              "desc": "景点",
+              "address": "西湖街道法云弄1号灵隐寺内(南侧)",
+              "ticket_price": 0,
+              "rating": 4.2,
+              "photo_url": "https://store.is.autonavi.com/showpic/cce3711300e44e910000003141910224?type=pic",
+              "visit_duration": 120,
+              "cost": 0,
+              "source": "amap",
+              "reservation_required": false,
+              "reservation_tips": ""
+            },
+            {
+              "time": "18:30",
+              "type": "meal",
+              "title": "杭州特色晚餐",
+              "desc": "享受杭州特色美食",
+              "address": "",
+              "cost": 100
+            }
+          ]
+        },
+        {
+          "day": 2,
+          "date": "2026-07-29",
+          "hotel": {
+            "name": "鑫隆商务酒店(萧绍路)",
+            "address": "萧绍路1007号",
+            "location": {
+              "longitude": 120.277285,
+              "latitude": 30.16464
+            },
+            "price_range": "",
+            "rating": "4.0",
+            "distance": "",
+            "type": "住宿服务;宾馆酒店;宾馆酒店",
+            "estimated_cost": 400,
+            "source": "amap",
+            "route_city": "杭州"
+          },
+          "hotel_source": "amap",
+          "slots": [
+            {
+              "time": "08:00",
+              "type": "meal",
+              "title": "当地特色早餐",
+              "desc": "品尝杭州地道早餐",
+              "address": "",
+              "cost": 30
+            },
+            {
+              "time": "09:00",
+              "type": "visit",
+              "title": "灵隐寺-华严殿",
+              "desc": "景点",
+              "address": "西湖街道西湖街道法云弄1号灵隐寺内(北侧)",
+              "ticket_price": 0,
+              "rating": 4.2,
+              "photo_url": "https://store.is.autonavi.com/showpic/1e3669c91022764b0000002728770037",
+              "visit_duration": 120,
+              "cost": 0,
+              "source": "amap",
+              "reservation_required": false,
+              "reservation_tips": ""
+            },
+            {
+              "time": "12:00",
+              "type": "meal",
+              "title": "午餐",
+              "desc": "游览途中就近用餐",
+              "address": "",
+              "cost": 80
+            },
+            {
+              "time": "18:30",
+              "type": "meal",
+              "title": "杭州特色晚餐",
+              "desc": "享受杭州特色美食",
+              "address": "",
+              "cost": 100
+            }
+          ]
+        }
+      ],
+      "weather_info": [
+        {
+          "date": "2026-07-27",
+          "day_weather": "多云",
+          "night_weather": "多云",
+          "day_temp": "37",
+          "night_temp": "28",
+          "wind_direction": "东南",
+          "wind_power": "1-3",
+          "source": "amap_forecast",
+          "note": "高德逐日天气预报"
+        },
+        {
+          "date": "2026-07-28",
+          "day_weather": "多云",
+          "night_weather": "多云",
+          "day_temp": "36",
+          "night_temp": "27",
+          "wind_direction": "西南",
+          "wind_power": "1-3",
+          "source": "amap_forecast",
+          "note": "高德逐日天气预报"
+        }
+      ],
+      "trip_schema": {
+        "city": "杭州",
+        "origin": "",
+        "waypoints": [],
+        "forbidden_cities": [],
+        "route_summary": "杭州2日游",
+        "start_date": "2026-07-28",
+        "end_date": "2026-07-29",
+        "days": [
+          {
+            "date": "2026-07-28",
+            "day_index": 0,
+            "description": "杭州第1天行程",
+            "transportation": "自驾",
+            "accommodation": "舒适型酒店",
+            "hotel": {
+              "name": "鑫隆商务酒店(萧绍路)",
+              "address": "萧绍路1007号",
+              "location": {
+                "longitude": 120.277285,
+                "latitude": 30.16464
+              },
+              "price_range": "",
+              "rating": "4.0",
+              "distance": "",
+              "type": "住宿服务;宾馆酒店;宾馆酒店",
+              "estimated_cost": 400,
+              "source": "amap",
+              "route_city": "杭州"
+            },
+            "attractions": [
+              {
+                "name": "灵隐寺",
+                "address": "法云弄1号",
+                "location": {
+                  "longitude": 120.101406,
+                  "latitude": 30.240826
+                },
+                "visit_duration": 120,
+                "description": "景点",
+                "category": "景点",
+                "rating": 4.8,
+                "photos": [
+                  "http://store.is.autonavi.com/showpic/4aa0a6a1b6ee72c9833441f363cbb43a"
+                ],
+                "poi_id": "",
+                "image_url": "http://store.is.autonavi.com/showpic/4aa0a6a1b6ee72c9833441f363cbb43a",
+                "ticket_price": 0,
+                "route_city": "杭州",
+                "source": "amap",
+                "reservation_required": false,
+                "reservation_tips": ""
+              },
+              {
+                "name": "济公殿",
+                "address": "灵隐路法云弄1号灵隐景区东北角",
+                "location": {
+                  "longitude": 120.101678,
+                  "latitude": 30.241442
+                },
+                "visit_duration": 120,
+                "description": "景点",
+                "category": "景点",
+                "rating": 4.2,
+                "photos": [
+                  "https://aos-comment.amap.com/B0FFFWXTX3/comment/content_media_external_file_36607_ss__1770384127595_62720804.jpg"
+                ],
+                "poi_id": "",
+                "image_url": "https://aos-comment.amap.com/B0FFFWXTX3/comment/content_media_external_file_36607_ss__1770384127595_62720804.jpg",
+                "ticket_price": 0,
+                "route_city": "杭州",
+                "source": "amap",
+                "reservation_required": false,
+                "reservation_tips": ""
+              },
+              {
+                "name": "灵隐寺-天王殿",
+                "address": "西湖街道法云弄1号灵隐寺内(南侧)",
+                "location": {
+                  "longitude": 120.101695,
+                  "latitude": 30.240103
+                },
+                "visit_duration": 120,
+                "description": "景点",
+                "category": "景点",
+                "rating": 4.2,
+                "photos": [
+                  "https://store.is.autonavi.com/showpic/cce3711300e44e910000003141910224?type=pic"
+                ],
+                "poi_id": "",
+                "image_url": "https://store.is.autonavi.com/showpic/cce3711300e44e910000003141910224?type=pic",
+                "ticket_price": 0,
+                "route_city": "杭州",
+                "source": "amap",
+                "reservation_required": false,
+                "reservation_tips": ""
+              }
+            ],
+            "meals": [
+              {
+                "type": "breakfast",
+                "name": "当地特色早餐",
+                "address": null,
+                "location": null,
+                "description": "品尝杭州地道早餐",
+                "estimated_cost": 30
+              },
+              {
+                "type": "lunch",
+                "name": "午餐",
+                "address": null,
+                "location": null,
+                "description": "游览途中就近用餐",
+                "estimated_cost": 80
+              },
+              {
+                "type": "dinner",
+                "name": "杭州特色晚餐",
+                "address": null,
+                "location": null,
+                "description": "享受杭州特色美食",
+                "estimated_cost": 100
+              }
+            ]
+          },
+          {
+            "date": "2026-07-29",
+            "day_index": 1,
+            "description": "杭州第2天行程",
+            "transportation": "自驾",
+            "accommodation": "舒适型酒店",
+            "hotel": {
+              "name": "鑫隆商务酒店(萧绍路)",
+              "address": "萧绍路1007号",
+              "location": {
+                "longitude": 120.277285,
+                "latitude": 30.16464
+              },
+              "price_range": "",
+              "rating": "4.0",
+              "distance": "",
+              "type": "住宿服务;宾馆酒店;宾馆酒店",
+              "estimated_cost": 400,
+              "source": "amap",
+              "route_city": "杭州"
+            },
+            "attractions": [
+              {
+                "name": "灵隐寺-华严殿",
+                "address": "西湖街道西湖街道法云弄1号灵隐寺内(北侧)",
+                "location": {
+                  "longitude": 120.100851,
+                  "latitude": 30.24226
+                },
+                "visit_duration": 120,
+                "description": "景点",
+                "category": "景点",
+                "rating": 4.2,
+                "photos": [
+                  "https://store.is.autonavi.com/showpic/1e3669c91022764b0000002728770037"
+                ],
+                "poi_id": "",
+                "image_url": "https://store.is.autonavi.com/showpic/1e3669c91022764b0000002728770037",
+                "ticket_price": 0,
+                "route_city": "杭州",
+                "source": "amap",
+                "reservation_required": false,
+                "reservation_tips": ""
+              }
+            ],
+            "meals": [
+              {
+                "type": "breakfast",
+                "name": "当地特色早餐",
+                "address": null,
+                "location": null,
+                "description": "品尝杭州地道早餐",
+                "estimated_cost": 30
+              },
+              {
+                "type": "lunch",
+                "name": "午餐",
+                "address": null,
+                "location": null,
+                "description": "游览途中就近用餐",
+                "estimated_cost": 80
+              },
+              {
+                "type": "dinner",
+                "name": "杭州特色晚餐",
+                "address": null,
+                "location": null,
+                "description": "享受杭州特色美食",
+                "estimated_cost": 100
+              }
+            ]
+          }
+        ],
+        "weather_info": [
+          {
+            "date": "2026-07-27",
+            "day_weather": "多云",
+            "night_weather": "多云",
+            "day_temp": "37",
+            "night_temp": "28",
+            "wind_direction": "东南",
+            "wind_power": "1-3",
+            "source": "amap_forecast",
+            "note": "高德逐日天气预报"
+          },
+          {
+            "date": "2026-07-28",
+            "day_weather": "多云",
+            "night_weather": "多云",
+            "day_temp": "36",
+            "night_temp": "27",
+            "wind_direction": "西南",
+            "wind_power": "1-3",
+            "source": "amap_forecast",
+            "note": "高德逐日天气预报"
+          }
+        ],
+        "overall_suggestions": "杭州2日游，天气多云，每日安排2-3个目的地，预计总费用约1320元。",
+        "budget": {
+          "total_attractions": 0,
+          "total_hotels": 800,
+          "total_meals": 420,
+          "total_transportation": 100,
+          "total": 1320
+        }
+      }
+    },
+    "trip_schema": {
+      "city": "杭州",
+      "origin": "",
+      "waypoints": [],
+      "forbidden_cities": [],
+      "route_summary": "杭州2日游",
+      "start_date": "2026-07-28",
+      "end_date": "2026-07-29",
+      "days": [
+        {
+          "date": "2026-07-28",
+          "day_index": 0,
+          "description": "杭州第1天行程",
+          "transportation": "自驾",
+          "accommodation": "舒适型酒店",
+          "hotel": {
+            "name": "鑫隆商务酒店(萧绍路)",
+            "address": "萧绍路1007号",
+            "location": {
+              "longitude": 120.277285,
+              "latitude": 30.16464
+            },
+            "price_range": "",
+            "rating": "4.0",
+            "distance": "",
+            "type": "住宿服务;宾馆酒店;宾馆酒店",
+            "estimated_cost": 400,
+            "source": "amap",
+            "route_city": "杭州"
+          },
+          "attractions": [
+            {
+              "name": "灵隐寺",
+              "address": "法云弄1号",
+              "location": {
+                "longitude": 120.101406,
+                "latitude": 30.240826
+              },
+              "visit_duration": 120,
+              "description": "景点",
+              "category": "景点",
+              "rating": 4.8,
+              "photos": [
+                "http://store.is.autonavi.com/showpic/4aa0a6a1b6ee72c9833441f363cbb43a"
+              ],
+              "poi_id": "",
+              "image_url": "http://store.is.autonavi.com/showpic/4aa0a6a1b6ee72c9833441f363cbb43a",
+              "ticket_price": 0,
+              "route_city": "杭州",
+              "source": "amap",
+              "reservation_required": false,
+              "reservation_tips": ""
+            },
+            {
+              "name": "济公殿",
+              "address": "灵隐路法云弄1号灵隐景区东北角",
+              "location": {
+                "longitude": 120.101678,
+                "latitude": 30.241442
+              },
+              "visit_duration": 120,
+              "description": "景点",
+              "category": "景点",
+              "rating": 4.2,
+              "photos": [
+                "https://aos-comment.amap.com/B0FFFWXTX3/comment/content_media_external_file_36607_ss__1770384127595_62720804.jpg"
+              ],
+              "poi_id": "",
+              "image_url": "https://aos-comment.amap.com/B0FFFWXTX3/comment/content_media_external_file_36607_ss__1770384127595_62720804.jpg",
+              "ticket_price": 0,
+              "route_city": "杭州",
+              "source": "amap",
+              "reservation_required": false,
+              "reservation_tips": ""
+            },
+            {
+              "name": "灵隐寺-天王殿",
+              "address": "西湖街道法云弄1号灵隐寺内(南侧)",
+              "location": {
+                "longitude": 120.101695,
+                "latitude": 30.240103
+              },
+              "visit_duration": 120,
+              "description": "景点",
+              "category": "景点",
+              "rating": 4.2,
+              "photos": [
+                "https://store.is.autonavi.com/showpic/cce3711300e44e910000003141910224?type=pic"
+              ],
+              "poi_id": "",
+              "image_url": "https://store.is.autonavi.com/showpic/cce3711300e44e910000003141910224?type=pic",
+              "ticket_price": 0,
+              "route_city": "杭州",
+              "source": "amap",
+              "reservation_required": false,
+              "reservation_tips": ""
+            }
+          ],
+          "meals": [
+            {
+              "type": "breakfast",
+              "name": "当地特色早餐",
+              "address": null,
+              "location": null,
+              "description": "品尝杭州地道早餐",
+              "estimated_cost": 30
+            },
+            {
+              "type": "lunch",
+              "name": "午餐",
+              "address": null,
+              "location": null,
+              "description": "游览途中就近用餐",
+              "estimated_cost": 80
+            },
+            {
+              "type": "dinner",
+              "name": "杭州特色晚餐",
+              "address": null,
+              "location": null,
+              "description": "享受杭州特色美食",
+              "estimated_cost": 100
+            }
+          ]
+        },
+        {
+          "date": "2026-07-29",
+          "day_index": 1,
+          "description": "杭州第2天行程",
+          "transportation": "自驾",
+          "accommodation": "舒适型酒店",
+          "hotel": {
+            "name": "鑫隆商务酒店(萧绍路)",
+            "address": "萧绍路1007号",
+            "location": {
+              "longitude": 120.277285,
+              "latitude": 30.16464
+            },
+            "price_range": "",
+            "rating": "4.0",
+            "distance": "",
+            "type": "住宿服务;宾馆酒店;宾馆酒店",
+            "estimated_cost": 400,
+            "source": "amap",
+            "route_city": "杭州"
+          },
+          "attractions": [
+            {
+              "name": "灵隐寺-华严殿",
+              "address": "西湖街道西湖街道法云弄1号灵隐寺内(北侧)",
+              "location": {
+                "longitude": 120.100851,
+                "latitude": 30.24226
+              },
+              "visit_duration": 120,
+              "description": "景点",
+              "category": "景点",
+              "rating": 4.2,
+              "photos": [
+                "https://store.is.autonavi.com/showpic/1e3669c91022764b0000002728770037"
+              ],
+              "poi_id": "",
+              "image_url": "https://store.is.autonavi.com/showpic/1e3669c91022764b0000002728770037",
+              "ticket_price": 0,
+              "route_city": "杭州",
+              "source": "amap",
+              "reservation_required": false,
+              "reservation_tips": ""
+            }
+          ],
+          "meals": [
+            {
+              "type": "breakfast",
+              "name": "当地特色早餐",
+              "address": null,
+              "location": null,
+              "description": "品尝杭州地道早餐",
+              "estimated_cost": 30
+            },
+            {
+              "type": "lunch",
+              "name": "午餐",
+              "address": null,
+              "location": null,
+              "description": "游览途中就近用餐",
+              "estimated_cost": 80
+            },
+            {
+              "type": "dinner",
+              "name": "杭州特色晚餐",
+              "address": null,
+              "location": null,
+              "description": "享受杭州特色美食",
+              "estimated_cost": 100
+            }
+          ]
+        }
+      ],
+      "weather_info": [
+        {
+          "date": "2026-07-27",
+          "day_weather": "多云",
+          "night_weather": "多云",
+          "day_temp": "37",
+          "night_temp": "28",
+          "wind_direction": "东南",
+          "wind_power": "1-3",
+          "source": "amap_forecast",
+          "note": "高德逐日天气预报"
+        },
+        {
+          "date": "2026-07-28",
+          "day_weather": "多云",
+          "night_weather": "多云",
+          "day_temp": "36",
+          "night_temp": "27",
+          "wind_direction": "西南",
+          "wind_power": "1-3",
+          "source": "amap_forecast",
+          "note": "高德逐日天气预报"
+        }
+      ],
+      "overall_suggestions": "杭州2日游，天气多云，每日安排2-3个目的地，预计总费用约1320元。",
+      "budget": {
+        "total_attractions": 0,
+        "total_hotels": 800,
+        "total_meals": 420,
+        "total_transportation": 100,
+        "total": 1320
+      }
+    },
+    "suggestions": [
+      "杭州2日游",
+      "预算¥1320"
+    ],
+    "needs_clarification": false
+  },
+  "error": null
+}

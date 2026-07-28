@@ -109,9 +109,9 @@ ALERT_CATEGORIES = {
         "label": "fatigue", "label_zh": "疲劳", "label_en": "Fatigue",
         "alert": "驾驶员疲劳驾驶，请注意休息",
         "severities": {
-            "mild":     {"threshold": 2.0, "action": "attention_hint"},
-            "moderate": {"threshold": 3.0, "action": "distract"},
-            "severe":   {"threshold": 5.0, "action": "distract"},
+            "mild":     {"threshold": 1.10, "action": "attention_hint"},
+            "moderate": {"threshold": 1.80, "action": "attention_hint"},
+            "severe":   {"threshold": 2.50, "action": "distract"},
         },
     },
     "head": {

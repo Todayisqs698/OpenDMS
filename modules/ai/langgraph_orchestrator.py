@@ -1,5 +1,8 @@
 """
-LangGraph 多 Agent 编排引擎 — 真正的状态图编排
+Legacy multimodal orchestrator for camera/gesture/environment events.
+
+新用户文本请求请走 modules.ai.orchestrator.AgentOrchestrator 或 /api/agent/chat。
+本模块保留给 app.py 和 /api/analyze 的多模态感知兼容路径。
 
 三个 Agent 并行分析，条件路由，安全 Agent 优先级最高。
 如果 langgraph 未安装，自动降级为顺序调用模式。
@@ -171,7 +174,7 @@ class Orchestrator:
         return {
             "action_code": interaction.get("action_code", "unknown"),
             "recommendation_text": interaction.get("recommendation_text", ""),
-            "source": "orchestrator",
+            "source": "legacy_multimodal_orchestrator",
         }
 
     # ── 公共接口 ──
@@ -194,7 +197,7 @@ class Orchestrator:
             "action_code": "unknown",
             "recommendation_text": "",
             "risk_level": "normal",
-            "source": "orchestrator",
+            "source": "legacy_multimodal_orchestrator",
             "edge_cloud_route": "local",
         }
 
@@ -205,8 +208,9 @@ class Orchestrator:
                     "action_code": final.get("action_code", "unknown"),
                     "recommendation_text": final.get("recommendation_text", ""),
                     "risk_level": final.get("risk_level", "normal"),
-                    "source": final.get("source", "orchestrator"),
+                    "source": final.get("source", "legacy_multimodal_orchestrator"),
                     "env_context": final.get("environment_result", {}),
+                    "legacy": True,
                 }
             except Exception as e:
                 logger.warning(f"LangGraph 执行失败: {e}，降级顺序模式")
@@ -227,7 +231,8 @@ class Orchestrator:
                 "action_code": "distract",
                 "recommendation_text": safety.get("alert", "请注视前方道路"),
                 "risk_level": safety.get("risk_level"),
-                "source": "safety_agent",
+                "source": "legacy_safety_agent",
+                "legacy": True,
             }
 
         # 交互 + 环境 并行执行
@@ -250,6 +255,7 @@ class Orchestrator:
             "action_code": interaction.get("action_code", "unknown"),
             "recommendation_text": interaction.get("recommendation_text", ""),
             "risk_level": "normal",
-            "source": "orchestrator_parallel",
+            "source": "legacy_multimodal_orchestrator_parallel",
             "env_context": env,
+            "legacy": True,
         }

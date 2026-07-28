@@ -132,7 +132,7 @@ def _missing_required_slots(category: str, params: dict[str, Any]) -> list[str]:
             return ["address"]
         if not params.get("label"):
             return ["label"]
-    if category == "music_control" and not (params.get("action") or params.get("singer") or params.get("song")):
+    if category == "music_control" and not (params.get("action") or params.get("singer") or params.get("song") or params.get("volume_action") or "volume" in params):
         return ["music_action_or_query"]
     if category == "ac_control" and not (params.get("action") or "temperature" in params):
         return ["ac_action_or_temperature"]
@@ -152,7 +152,7 @@ def _clarification_message(intent: NormalizedIntent) -> str:
             return "请告诉我要保存的具体地址。"
         return "你想设置家还是公司的地址？"
     if category == "music_control":
-        return "你想播放、暂停，还是搜索哪首歌？"
+        return "你想播放、暂停、调音量，还是搜索哪首歌？"
     if category == "ac_control":
         return "你想打开、关闭空调，还是调到多少度？"
     return "我需要再确认一下你的具体需求。"

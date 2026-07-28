@@ -25,6 +25,7 @@ export function useAgentWS() {
   const finalReply = ref('')
   const navInfo = ref<Partial<NavInfo>>({})
   const tripPlan = ref<any>(null)
+  const musicStateVersion = ref(0)  // AI 操作音乐后递增，触发 BottomBar 刷新
   const error = ref('')
 
   let ws: WebSocket | null = null
@@ -113,6 +114,7 @@ export function useAgentWS() {
           steps: (data.steps as string[]) || [],
           routeSource: (data.source as string) || '',
           coordinateSystem: (data.coordinate_system as string) || '',
+          originSource: (data.origin_source as string) || '',
         }
         // 也作为 Agent 结果卡展示
         results.value = [
@@ -150,6 +152,13 @@ export function useAgentWS() {
       // ── 行程规划结果 ──
       case 'agent_trip_plan': {
         tripPlan.value = data
+        break
+      }
+
+      // ── 音乐状态变更（AI 控制音乐后通知前端刷新）──
+      case 'agent_music_state': {
+        // 触发 musicStateVersion 变更，BottomBar 可通过 watch 感知
+        musicStateVersion.value = Date.now()
         break
       }
 
@@ -207,6 +216,7 @@ export function useAgentWS() {
     finalReply: readonly(finalReply),
     navInfo: readonly(navInfo),
     tripPlan: readonly(tripPlan),
+    musicStateVersion: readonly(musicStateVersion),
     error: readonly(error),
     clear,
     disconnect,

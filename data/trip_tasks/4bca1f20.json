@@ -1,0 +1,286 @@
+{
+  "task_id": "4bca1f20",
+  "status": "completed",
+  "stage": "completed",
+  "progress": 100,
+  "message": "旅行计划生成成功",
+  "result": {
+    "success": true,
+    "type": "trip_plan",
+    "reply": "行程规划已显示在中控屏上咯！杭州1日游，天气多云，每日安排2-3个目的地，预计总费用约660元。预算约¥660元～",
+    "weather": {
+      "date": "2026-07-27",
+      "day_weather": "多云",
+      "night_weather": "多云",
+      "day_temp": "37",
+      "night_temp": "28",
+      "wind_direction": "东南",
+      "wind_power": "1-3",
+      "source": "amap_forecast",
+      "note": "高德逐日天气预报"
+    },
+    "trip_plan": {
+      "city": "杭州",
+      "origin": "",
+      "waypoints": [],
+      "forbidden_cities": [],
+      "route_summary": "杭州1日游",
+      "days": 1,
+      "date": "2026-07-28",
+      "start_date": "2026-07-28",
+      "end_date": "2026-07-28",
+      "summary": "杭州1日游，天气多云，每日安排2-3个目的地，预计总费用约660元。",
+      "budget": {
+        "total": 660,
+        "tickets": 0,
+        "meals": 210,
+        "transport": 50,
+        "hotels": 400,
+        "per_day": 660
+      },
+      "itinerary": [
+        {
+          "day": 1,
+          "date": "2026-07-28",
+          "hotel": {
+            "name": "泰至宾馆(杭州桂花西路地铁站店)",
+            "address": "富春街道春秋北路39-1号",
+            "location": {
+              "longitude": 119.944413,
+              "latitude": 30.050746
+            },
+            "price_range": "",
+            "rating": "4.3",
+            "distance": "",
+            "type": "住宿服务;宾馆酒店;宾馆酒店",
+            "estimated_cost": 400,
+            "source": "amap",
+            "route_city": "杭州"
+          },
+          "hotel_source": "amap",
+          "slots": [
+            {
+              "time": "08:00",
+              "type": "meal",
+              "title": "当地特色早餐",
+              "desc": "品尝杭州地道早餐",
+              "address": "",
+              "cost": 30
+            },
+            {
+              "time": "09:00",
+              "type": "visit",
+              "title": "钱江世纪公园",
+              "desc": "公园",
+              "address": "秋韵路a7-2号",
+              "ticket_price": 0,
+              "rating": 4.7,
+              "photo_url": "http://aos-cdn-image.amap.com/sns/ugccomment/59beb1e9-9cda-4cd4-8c44-d3b51d9aff36.jpg",
+              "visit_duration": 90,
+              "cost": 0
+            },
+            {
+              "time": "11:00",
+              "type": "visit",
+              "title": "清河坊历史文化特色街区",
+              "desc": "景点",
+              "address": "河坊街180号",
+              "ticket_price": 0,
+              "rating": 4.7,
+              "photo_url": "http://store.is.autonavi.com/showpic/e7a956f2beba64afa31364a6858dac82",
+              "visit_duration": 120,
+              "cost": 0
+            },
+            {
+              "time": "13:30",
+              "type": "meal",
+              "title": "午餐",
+              "desc": "游览途中就近用餐",
+              "address": "",
+              "cost": 80
+            },
+            {
+              "time": "14:30",
+              "type": "visit",
+              "title": "五柳巷历史街区",
+              "desc": "景点",
+              "address": "小营街道斗富二桥西河下9号附近",
+              "ticket_price": 0,
+              "rating": 4.6,
+              "photo_url": "http://store.is.autonavi.com/showpic/86a18cfb032e58530262ce8824bb98f7",
+              "visit_duration": 120,
+              "cost": 0
+            },
+            {
+              "time": "18:30",
+              "type": "meal",
+              "title": "杭州特色晚餐",
+              "desc": "享受杭州特色美食",
+              "address": "",
+              "cost": 100
+            }
+          ]
+        }
+      ],
+      "weather_info": [
+        {
+          "date": "2026-07-27",
+          "day_weather": "多云",
+          "night_weather": "多云",
+          "day_temp": "37",
+          "night_temp": "28",
+          "wind_direction": "东南",
+          "wind_power": "1-3",
+          "source": "amap_forecast",
+          "note": "高德逐日天气预报"
+        }
+      ],
+      "trip_schema": {
+        "city": "杭州",
+        "origin": "",
+        "waypoints": [],
+        "forbidden_cities": [],
+        "route_summary": "杭州1日游",
+        "start_date": "2026-07-28",
+        "end_date": "2026-07-28",
+        "days": [
+          {
+            "date": "2026-07-28",
+            "day_index": 0,
+            "description": "杭州第1天行程",
+            "transportation": "自驾",
+            "accommodation": "舒适型酒店",
+            "hotel": {
+              "name": "泰至宾馆(杭州桂花西路地铁站店)",
+              "address": "富春街道春秋北路39-1号",
+              "location": {
+                "longitude": 119.944413,
+                "latitude": 30.050746
+              },
+              "price_range": "",
+              "rating": "4.3",
+              "distance": "",
+              "type": "住宿服务;宾馆酒店;宾馆酒店",
+              "estimated_cost": 400,
+              "source": "amap",
+              "route_city": "杭州"
+            },
+            "attractions": [
+              {
+                "name": "钱江世纪公园",
+                "address": "秋韵路a7-2号",
+                "location": {
+                  "longitude": 120.237194,
+                  "latitude": 30.244685
+                },
+                "visit_duration": 90,
+                "description": "公园",
+                "category": "公园",
+                "rating": 4.7,
+                "photos": [
+                  "http://aos-cdn-image.amap.com/sns/ugccomment/59beb1e9-9cda-4cd4-8c44-d3b51d9aff36.jpg"
+                ],
+                "poi_id": "",
+                "image_url": "http://aos-cdn-image.amap.com/sns/ugccomment/59beb1e9-9cda-4cd4-8c44-d3b51d9aff36.jpg",
+                "ticket_price": 0,
+                "route_city": "杭州"
+              },
+              {
+                "name": "清河坊历史文化特色街区",
+                "address": "河坊街180号",
+                "location": {
+                  "longitude": 120.169899,
+                  "latitude": 30.239827
+                },
+                "visit_duration": 120,
+                "description": "景点",
+                "category": "景点",
+                "rating": 4.7,
+                "photos": [
+                  "http://store.is.autonavi.com/showpic/e7a956f2beba64afa31364a6858dac82"
+                ],
+                "poi_id": "",
+                "image_url": "http://store.is.autonavi.com/showpic/e7a956f2beba64afa31364a6858dac82",
+                "ticket_price": 0,
+                "route_city": "杭州"
+              },
+              {
+                "name": "五柳巷历史街区",
+                "address": "小营街道斗富二桥西河下9号附近",
+                "location": {
+                  "longitude": 120.176615,
+                  "latitude": 30.242162
+                },
+                "visit_duration": 120,
+                "description": "景点",
+                "category": "景点",
+                "rating": 4.6,
+                "photos": [
+                  "http://store.is.autonavi.com/showpic/86a18cfb032e58530262ce8824bb98f7"
+                ],
+                "poi_id": "",
+                "image_url": "http://store.is.autonavi.com/showpic/86a18cfb032e58530262ce8824bb98f7",
+                "ticket_price": 0,
+                "route_city": "杭州"
+              }
+            ],
+            "meals": [
+              {
+                "type": "breakfast",
+                "name": "当地特色早餐",
+                "address": null,
+                "location": null,
+                "description": "品尝杭州地道早餐",
+                "estimated_cost": 30
+              },
+              {
+                "type": "lunch",
+                "name": "午餐",
+                "address": null,
+                "location": null,
+                "description": "游览途中就近用餐",
+                "estimated_cost": 80
+              },
+              {
+                "type": "dinner",
+                "name": "杭州特色晚餐",
+                "address": null,
+                "location": null,
+                "description": "享受杭州特色美食",
+                "estimated_cost": 100
+              }
+            ]
+          }
+        ],
+        "weather_info": [
+          {
+            "date": "2026-07-27",
+            "day_weather": "多云",
+            "night_weather": "多云",
+            "day_temp": "37",
+            "night_temp": "28",
+            "wind_direction": "东南",
+            "wind_power": "1-3",
+            "source": "amap_forecast",
+            "note": "高德逐日天气预报"
+          }
+        ],
+        "overall_suggestions": "杭州1日游，天气多云，每日安排2-3个目的地，预计总费用约660元。",
+        "budget": {
+          "total_attractions": 0,
+          "total_hotels": 400,
+          "total_meals": 210,
+          "total_transportation": 50,
+          "total": 660
+        }
+      }
+    },
+    "trip_schema": null,
+    "suggestions": [
+      "杭州1日游",
+      "预算¥660"
+    ],
+    "needs_clarification": false
+  },
+  "error": null
+}

@@ -1,0 +1,435 @@
+{
+  "task_id": "3bd36d03",
+  "status": "completed",
+  "stage": "completed",
+  "progress": 100,
+  "message": "旅行计划生成成功",
+  "result": {
+    "success": true,
+    "type": "trip_plan",
+    "reply": "行程规划已显示在中控屏上咯！??2日游，天气天气数据不可用，每日安排2-3个目的地，预计总费用约1320元。预算约¥1320元～",
+    "weather": {
+      "date": "2026-07-28",
+      "day_weather": "天气数据不可用",
+      "night_weather": "天气数据不可用",
+      "day_temp": 0,
+      "night_temp": 0,
+      "wind_direction": "",
+      "wind_power": "",
+      "source": "current_copy",
+      "note": "当前天气复制为多日参考，非真实逐日预报"
+    },
+    "trip_plan": {
+      "city": "??",
+      "origin": "",
+      "waypoints": [],
+      "forbidden_cities": [],
+      "route_summary": "??2日游",
+      "days": 2,
+      "date": "2026-07-28",
+      "start_date": "2026-07-28",
+      "end_date": "2026-07-29",
+      "summary": "??2日游，天气天气数据不可用，每日安排2-3个目的地，预计总费用约1320元。",
+      "budget": {
+        "total": 1320,
+        "tickets": 0,
+        "meals": 420,
+        "transport": 100,
+        "hotels": 800,
+        "per_day": 660
+      },
+      "itinerary": [
+        {
+          "day": 1,
+          "date": "2026-07-28",
+          "hotel": {
+            "name": "北京中国大饭店大堂",
+            "address": "朝外街道建国门外大街1号北京中国大饭店",
+            "location": {
+              "longitude": 116.459216,
+              "latitude": 39.909888
+            },
+            "price_range": "",
+            "rating": "5.0",
+            "distance": "",
+            "type": "住宿服务;宾馆酒店;五星级宾馆",
+            "estimated_cost": 400,
+            "source": "amap",
+            "route_city": "??"
+          },
+          "hotel_source": "amap",
+          "slots": [
+            {
+              "time": "08:00",
+              "type": "meal",
+              "title": "当地特色早餐",
+              "desc": "品尝??地道早餐",
+              "address": "",
+              "cost": 30
+            },
+            {
+              "time": "09:00",
+              "type": "visit",
+              "title": "故宫博物院",
+              "desc": "博物馆",
+              "address": "景山前街4号",
+              "ticket_price": 0,
+              "rating": 4.9,
+              "photo_url": "http://store.is.autonavi.com/showpic/2f968490d105bb2741e17f90b85c6b79",
+              "visit_duration": 180,
+              "cost": 0
+            },
+            {
+              "time": "12:30",
+              "type": "visit",
+              "title": "天安门",
+              "desc": "景点",
+              "address": "长安街北侧",
+              "ticket_price": 0,
+              "rating": 0,
+              "photo_url": "http://store.is.autonavi.com/showpic/17a36a737908810a310387c7d53e878a",
+              "visit_duration": 120,
+              "cost": 0
+            },
+            {
+              "time": "15:00",
+              "type": "meal",
+              "title": "午餐",
+              "desc": "游览途中就近用餐",
+              "address": "",
+              "cost": 80
+            },
+            {
+              "time": "16:00",
+              "type": "visit",
+              "title": "雍和宫",
+              "desc": "景点",
+              "address": "雍和宫大街28号(雍和宫地铁站F东南口步行250米)",
+              "ticket_price": 0,
+              "rating": 4.8,
+              "photo_url": "http://store.is.autonavi.com/showpic/9b9abb2a9fff0b6491230aa4435f7ad5",
+              "visit_duration": 120,
+              "cost": 0
+            },
+            {
+              "time": "18:30",
+              "type": "meal",
+              "title": "??特色晚餐",
+              "desc": "享受??特色美食",
+              "address": "",
+              "cost": 100
+            }
+          ]
+        },
+        {
+          "day": 2,
+          "date": "2026-07-29",
+          "hotel": {
+            "name": "北京中国大饭店大堂",
+            "address": "朝外街道建国门外大街1号北京中国大饭店",
+            "location": {
+              "longitude": 116.459216,
+              "latitude": 39.909888
+            },
+            "price_range": "",
+            "rating": "5.0",
+            "distance": "",
+            "type": "住宿服务;宾馆酒店;五星级宾馆",
+            "estimated_cost": 400,
+            "source": "amap",
+            "route_city": "??"
+          },
+          "hotel_source": "amap",
+          "slots": [
+            {
+              "time": "08:00",
+              "type": "meal",
+              "title": "当地特色早餐",
+              "desc": "品尝??地道早餐",
+              "address": "",
+              "cost": 30
+            },
+            {
+              "time": "09:00",
+              "type": "visit",
+              "title": "天安门广场",
+              "desc": "公园",
+              "address": "东长安街",
+              "ticket_price": 0,
+              "rating": 4.9,
+              "photo_url": "http://aos-cdn-image.amap.com/sns/ugccomment/fab72424-5643-4c14-9486-ae1c8475eab7.jpg",
+              "visit_duration": 90,
+              "cost": 0
+            },
+            {
+              "time": "12:00",
+              "type": "meal",
+              "title": "午餐",
+              "desc": "游览途中就近用餐",
+              "address": "",
+              "cost": 80
+            },
+            {
+              "time": "18:30",
+              "type": "meal",
+              "title": "??特色晚餐",
+              "desc": "享受??特色美食",
+              "address": "",
+              "cost": 100
+            }
+          ]
+        }
+      ],
+      "weather_info": [
+        {
+          "date": "2026-07-28",
+          "day_weather": "天气数据不可用",
+          "night_weather": "天气数据不可用",
+          "day_temp": 0,
+          "night_temp": 0,
+          "wind_direction": "",
+          "wind_power": "",
+          "source": "current_copy",
+          "note": "当前天气复制为多日参考，非真实逐日预报"
+        },
+        {
+          "date": "2026-07-29",
+          "day_weather": "天气数据不可用",
+          "night_weather": "天气数据不可用",
+          "day_temp": 0,
+          "night_temp": 0,
+          "wind_direction": "",
+          "wind_power": "",
+          "source": "current_copy",
+          "note": "当前天气复制为多日参考，非真实逐日预报"
+        }
+      ],
+      "trip_schema": {
+        "city": "??",
+        "origin": "",
+        "waypoints": [],
+        "forbidden_cities": [],
+        "route_summary": "??2日游",
+        "start_date": "2026-07-28",
+        "end_date": "2026-07-29",
+        "days": [
+          {
+            "date": "2026-07-28",
+            "day_index": 0,
+            "description": "??第1天行程",
+            "transportation": "自驾",
+            "accommodation": "舒适型酒店",
+            "hotel": {
+              "name": "北京中国大饭店大堂",
+              "address": "朝外街道建国门外大街1号北京中国大饭店",
+              "location": {
+                "longitude": 116.459216,
+                "latitude": 39.909888
+              },
+              "price_range": "",
+              "rating": "5.0",
+              "distance": "",
+              "type": "住宿服务;宾馆酒店;五星级宾馆",
+              "estimated_cost": 400,
+              "source": "amap",
+              "route_city": "??"
+            },
+            "attractions": [
+              {
+                "name": "故宫博物院",
+                "address": "景山前街4号",
+                "location": {
+                  "longitude": 116.397029,
+                  "latitude": 39.917839
+                },
+                "visit_duration": 180,
+                "description": "博物馆",
+                "category": "博物馆",
+                "rating": 4.9,
+                "photos": [
+                  "http://store.is.autonavi.com/showpic/2f968490d105bb2741e17f90b85c6b79"
+                ],
+                "poi_id": "",
+                "image_url": "http://store.is.autonavi.com/showpic/2f968490d105bb2741e17f90b85c6b79",
+                "ticket_price": 0,
+                "route_city": "??"
+              },
+              {
+                "name": "天安门",
+                "address": "长安街北侧",
+                "location": {
+                  "longitude": 116.397463,
+                  "latitude": 39.909187
+                },
+                "visit_duration": 120,
+                "description": "景点",
+                "category": "景点",
+                "rating": null,
+                "photos": [
+                  "http://store.is.autonavi.com/showpic/17a36a737908810a310387c7d53e878a"
+                ],
+                "poi_id": "",
+                "image_url": "http://store.is.autonavi.com/showpic/17a36a737908810a310387c7d53e878a",
+                "ticket_price": 0,
+                "route_city": "??"
+              },
+              {
+                "name": "雍和宫",
+                "address": "雍和宫大街28号(雍和宫地铁站F东南口步行250米)",
+                "location": {
+                  "longitude": 116.417296,
+                  "latitude": 39.947239
+                },
+                "visit_duration": 120,
+                "description": "景点",
+                "category": "景点",
+                "rating": 4.8,
+                "photos": [
+                  "http://store.is.autonavi.com/showpic/9b9abb2a9fff0b6491230aa4435f7ad5"
+                ],
+                "poi_id": "",
+                "image_url": "http://store.is.autonavi.com/showpic/9b9abb2a9fff0b6491230aa4435f7ad5",
+                "ticket_price": 0,
+                "route_city": "??"
+              }
+            ],
+            "meals": [
+              {
+                "type": "breakfast",
+                "name": "当地特色早餐",
+                "address": null,
+                "location": null,
+                "description": "品尝??地道早餐",
+                "estimated_cost": 30
+              },
+              {
+                "type": "lunch",
+                "name": "午餐",
+                "address": null,
+                "location": null,
+                "description": "游览途中就近用餐",
+                "estimated_cost": 80
+              },
+              {
+                "type": "dinner",
+                "name": "??特色晚餐",
+                "address": null,
+                "location": null,
+                "description": "享受??特色美食",
+                "estimated_cost": 100
+              }
+            ]
+          },
+          {
+            "date": "2026-07-29",
+            "day_index": 1,
+            "description": "??第2天行程",
+            "transportation": "自驾",
+            "accommodation": "舒适型酒店",
+            "hotel": {
+              "name": "北京中国大饭店大堂",
+              "address": "朝外街道建国门外大街1号北京中国大饭店",
+              "location": {
+                "longitude": 116.459216,
+                "latitude": 39.909888
+              },
+              "price_range": "",
+              "rating": "5.0",
+              "distance": "",
+              "type": "住宿服务;宾馆酒店;五星级宾馆",
+              "estimated_cost": 400,
+              "source": "amap",
+              "route_city": "??"
+            },
+            "attractions": [
+              {
+                "name": "天安门广场",
+                "address": "东长安街",
+                "location": {
+                  "longitude": 116.397755,
+                  "latitude": 39.903182
+                },
+                "visit_duration": 90,
+                "description": "公园",
+                "category": "公园",
+                "rating": 4.9,
+                "photos": [
+                  "http://aos-cdn-image.amap.com/sns/ugccomment/fab72424-5643-4c14-9486-ae1c8475eab7.jpg"
+                ],
+                "poi_id": "",
+                "image_url": "http://aos-cdn-image.amap.com/sns/ugccomment/fab72424-5643-4c14-9486-ae1c8475eab7.jpg",
+                "ticket_price": 0,
+                "route_city": "??"
+              }
+            ],
+            "meals": [
+              {
+                "type": "breakfast",
+                "name": "当地特色早餐",
+                "address": null,
+                "location": null,
+                "description": "品尝??地道早餐",
+                "estimated_cost": 30
+              },
+              {
+                "type": "lunch",
+                "name": "午餐",
+                "address": null,
+                "location": null,
+                "description": "游览途中就近用餐",
+                "estimated_cost": 80
+              },
+              {
+                "type": "dinner",
+                "name": "??特色晚餐",
+                "address": null,
+                "location": null,
+                "description": "享受??特色美食",
+                "estimated_cost": 100
+              }
+            ]
+          }
+        ],
+        "weather_info": [
+          {
+            "date": "2026-07-28",
+            "day_weather": "天气数据不可用",
+            "night_weather": "天气数据不可用",
+            "day_temp": 0,
+            "night_temp": 0,
+            "wind_direction": "",
+            "wind_power": "",
+            "source": "current_copy",
+            "note": "当前天气复制为多日参考，非真实逐日预报"
+          },
+          {
+            "date": "2026-07-29",
+            "day_weather": "天气数据不可用",
+            "night_weather": "天气数据不可用",
+            "day_temp": 0,
+            "night_temp": 0,
+            "wind_direction": "",
+            "wind_power": "",
+            "source": "current_copy",
+            "note": "当前天气复制为多日参考，非真实逐日预报"
+          }
+        ],
+        "overall_suggestions": "??2日游，天气天气数据不可用，每日安排2-3个目的地，预计总费用约1320元。",
+        "budget": {
+          "total_attractions": 0,
+          "total_hotels": 800,
+          "total_meals": 420,
+          "total_transportation": 100,
+          "total": 1320
+        }
+      }
+    },
+    "trip_schema": null,
+    "suggestions": [
+      "??2日游",
+      "预算¥1320"
+    ],
+    "needs_clarification": false
+  },
+  "error": null
+}

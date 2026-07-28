@@ -247,6 +247,7 @@ TOOL_SCHEMAS = [
                 "type": "object",
                 "properties": {
                     "city": {"type": "string", "description": "目的地城市，如天津、北京"},
+                    "query": {"type": "string", "description": "用户的完整原始请求文本，包含所有约束条件（如'带老人'、'想去西湖'、'避开宋城'、'轻松一点'等）。必须传入用户原话，不要简化，否则行程规划会丢失关键约束。"},
                     "origin": {"type": "string", "description": "自驾线路起点城市，如天津，可选"},
                     "waypoints": {
                         "type": "array",
@@ -371,6 +372,12 @@ def control_music(command: str, **kwargs) -> dict:
     Returns:
         {"success": bool, ...}  success 严格基于后端返回的 status 字段
     """
+    def _playable(state: dict) -> bool:
+        if not isinstance(state, dict):
+            return False
+        song = state.get("current_song") or {}
+        return bool(state.get("playing") and isinstance(song, dict) and song.get("url"))
+
     try:
         if command == "search":
             keyword = kwargs.get("keyword", "")
@@ -395,8 +402,16 @@ def control_music(command: str, **kwargs) -> dict:
                 )
                 data = resp.json()
                 status = data.get("status", "")
+                state = data.get("data", {})
                 if status == "ok":
-                    return {"success": True, "state": data.get("data")}
+                    if _playable(state):
+                        return {"success": True, "state": state}
+                    return {
+                        "success": False,
+                        "state": state,
+                        "status": "needs_audio",
+                        "error": data.get("message") or "音乐接口未返回可播放音频源",
+                    }
                 else:
                     msg = data.get("message", "")
                     if status == "needs_audio":
@@ -405,7 +420,7 @@ def control_music(command: str, **kwargs) -> dict:
                         msg = f"播放失败 (status={status})"
                     return {"success": False, "error": msg, "status": status}
             else:
-                # 无 song_id：调用 pause 端点恢复当前播放（pause 是 toggle）
+                # 无 song_id：先调用 pause 端点恢复当前播放（pause 是 toggle）
                 resp = httpx.post(
                     f"{_BACKEND_BASE}/api/music/pause",
                     timeout=_TIMEOUT,
@@ -414,17 +429,36 @@ def control_music(command: str, **kwargs) -> dict:
                 status = data.get("status", "")
                 state = data.get("data", {})
                 playing = state.get("playing") if isinstance(state, dict) else None
-                if status == "ok" and playing:
+                if status == "ok" and _playable(state):
                     return {"success": True, "state": state,
                             "message": "已恢复播放"}
-                elif status == "needs_audio":
-                    return {"success": False, "error": "当前没有可播放的歌曲，请先搜索并选择歌曲",
+                elif status == "needs_audio" or (status == "ok" and not playing):
+                    # 没有可播放的歌曲 → 自动搜索热门歌曲并播放第一首
+                    try:
+                        sr = httpx.post(
+                            f"{_BACKEND_BASE}/api/music/search",
+                            json={"keyword": "热门"},
+                            timeout=_TIMEOUT,
+                        )
+                        songs = sr.json().get("songs", []) or sr.json().get("data", [])
+                        if songs:
+                            first = songs[0]
+                            pr = httpx.post(
+                                f"{_BACKEND_BASE}/api/music/play",
+                                json={"song_id": first.get("id")},
+                                timeout=_TIMEOUT,
+                            )
+                            pdata = pr.json()
+                            pstate = pdata.get("data", {})
+                            if pdata.get("status") == "ok" and _playable(pstate):
+                                return {"success": True, "state": pstate,
+                                        "song": first.get("name", ""),
+                                        "artist": first.get("artist", ""),
+                                        "message": f"为您播放《{first.get('name', '')}》"}
+                    except Exception:
+                        pass
+                    return {"success": False, "error": "当前没有可播放的歌曲，请告诉我您想听什么？",
                             "status": status}
-                elif status == "ok" and not playing:
-                    # toggle 后变为暂停，再 toggle 一次恢复
-                    httpx.post(f"{_BACKEND_BASE}/api/music/pause", timeout=_TIMEOUT)
-                    return {"success": True, "state": state,
-                            "message": "已恢复播放"}
                 else:
                     return {"success": False, "error": data.get("message", "播放失败"),
                             "status": status}
@@ -436,9 +470,11 @@ def control_music(command: str, **kwargs) -> dict:
                 timeout=_TIMEOUT,
             )
             data = resp.json()
-            return {"success": data.get("status") == "ok",
+            status = data.get("status", "")
+            return {"success": status == "ok",
                     "state": data.get("data"),
-                    "error": data.get("message", "") if data.get("status") != "ok" else ""}
+                    "status": status,
+                    "error": data.get("message", "") if status != "ok" else ""}
 
         elif command == "next":
             resp = httpx.post(
@@ -894,81 +930,160 @@ def search_attractions(
 
 def search_hotels(city: str, count: int = 5, preference: Optional[str] = None) -> dict:
     """
-    搜索城市酒店 POI。
+    搜索城市酒店 POI。支持星级/价格/舒适度偏好。
 
-    酒店解析独立于景点解析：不做室内检测、天气提示、游览时长估算或景点分类。
+    偏好关键词会被映射为高德搜索关键词，并尝试多轮搜索以获取更优结果。
     """
     amap_key = _get_amap_key()
     if not amap_key:
         logger.warning("search_hotels: AMAP_API_KEY 未配置")
         return {"success": False, "error": "高德地图 API Key 未配置", "city": city, "hotels": []}
 
-    keyword = preference or "酒店"
-    if "酒店" not in keyword and "宾馆" not in keyword and "住宿" not in keyword:
-        keyword = f"{keyword} 酒店"
+    # ── 偏好关键词 → 搜索词映射 ──
+    pref = (preference or "").strip()
+    _STAR_MAP = {
+        "五星": ["五星级酒店", "豪华酒店", "国际品牌酒店"],
+        "四星": ["四星级酒店", "高档酒店", "商务酒店"],
+        "三星": ["三星级酒店", "舒适型酒店"],
+        "豪华": ["豪华酒店", "五星级酒店", "度假酒店"],
+        "高端": ["高档酒店", "四星级酒店", "精品酒店"],
+        "舒适": ["舒适型酒店", "商务酒店", "精品酒店"],
+        "经济": ["经济型酒店", "快捷酒店"],
+        "便宜": ["经济型酒店", "快捷酒店"],
+    }
+    keywords_to_try = []
+    matched_star = False
+    for key, kws in _STAR_MAP.items():
+        if key in pref:
+            keywords_to_try.extend(kws)
+            matched_star = True
+            break
+    if not matched_star:
+        if pref and "酒店" not in pref:
+            keywords_to_try = [f"{pref} 酒店"]
+        else:
+            keywords_to_try = [pref] if pref else ["酒店"]
 
-    try:
-        resp = httpx.get(_AMAP_POI_URL, params={
-            "keywords": keyword,
-            "city": city,
-            "citylimit": "true",
-            "types": "100000",
-            "offset": min(count * 3, 25),
-            "page": 1,
-            "key": amap_key,
-            "extensions": "all",
-        }, timeout=10)
-        data = resp.json()
+    # 额外尝试一轮泛搜（扩大候选池）
+    if matched_star:
+        keywords_to_try.append(f"{city}酒店")
 
-        if data.get("status") != "1":
-            logger.error(f"高德酒店 POI 搜索失败: {data.get('info', '')}")
-            return {"success": False, "error": f"高德 API 错误: {data.get('info', '')}", "city": city, "hotels": []}
+    # ── 价格范围提取 ──
+    _price_min, _price_max = 0, 0
+    import re
+    price_match = re.search(r'(\d{3,4})\s*[-~到至]\s*(\d{3,4})', pref)
+    if price_match:
+        _price_min = int(price_match.group(1))
+        _price_max = int(price_match.group(2))
+        logger.info("search_hotels: 提取价格范围 %d-%d", _price_min, _price_max)
 
-        hotels = []
-        for poi in data.get("pois", []):
-            biz_ext = poi.get("biz_ext", {}) or {}
-            photos = poi.get("photos", []) or []
+    all_hotels = []
+    seen = set()
 
-            rating = ""
-            rating_str = biz_ext.get("rating", "") or ""
-            if rating_str:
-                try:
-                    rating = str(round(float(rating_str), 1))
-                except (ValueError, TypeError):
-                    rating = str(rating_str)
+    for kw in keywords_to_try:
+        if len(all_hotels) >= count * 4:
+            break
+        try:
+            resp = httpx.get(_AMAP_POI_URL, params={
+                "keywords": kw,
+                "city": city,
+                "citylimit": "true",
+                "types": "100000",
+                "offset": min(count * 3, 25),
+                "page": 1,
+                "key": amap_key,
+                "extensions": "all",
+            }, timeout=10)
+            data = resp.json()
+            if data.get("status") != "1":
+                continue
 
-            cost = 0
-            cost_str = biz_ext.get("cost", "") or ""
-            if cost_str:
-                try:
-                    cost = int(float(cost_str))
-                except (ValueError, TypeError):
-                    cost = 0
+            for poi in data.get("pois", []):
+                name = poi.get("name", "")
+                if name in seen:
+                    continue
+                seen.add(name)
 
-            photo_url = ""
-            if photos and isinstance(photos, list):
-                photo_url = photos[0].get("url", "") if isinstance(photos[0], dict) else ""
+                biz_ext = poi.get("biz_ext", {}) or {}
+                photos = poi.get("photos", []) or []
 
-            hotels.append({
-                "name": poi.get("name", ""),
-                "address": poi.get("address", "") or city,
-                "location": poi.get("location", ""),
-                "rating": rating,
-                "price_range": f"{cost}元起" if cost else "",
-                "type": poi.get("type", "") or preference or "酒店",
-                "estimated_cost": cost or 400,
-                "photo_url": photo_url,
-                "source": "amap",
-            })
+                rating = ""
+                rating_str = biz_ext.get("rating", "") or ""
+                if rating_str:
+                    try:
+                        rating = str(round(float(rating_str), 1))
+                    except (ValueError, TypeError):
+                        rating = str(rating_str)
 
-        return {"success": True, "city": city, "count": len(hotels[:count]), "hotels": hotels[:count]}
+                cost = 0
+                cost_str = biz_ext.get("cost", "") or ""
+                if cost_str:
+                    try:
+                        cost = int(float(cost_str))
+                    except (ValueError, TypeError):
+                        cost = 0
 
-    except httpx.TimeoutException:
-        logger.error("search_hotels: 高德 API 请求超时")
-        return {"success": False, "error": "酒店搜索超时", "city": city, "hotels": []}
-    except Exception as e:
-        logger.error(f"search_hotels 执行异常: {e}")
-        return {"success": False, "error": str(e), "city": city, "hotels": []}
+                photo_url = ""
+                if photos and isinstance(photos, list):
+                    photo_url = photos[0].get("url", "") if isinstance(photos[0], dict) else ""
+
+                all_hotels.append({
+                    "name": name,
+                    "address": poi.get("address", "") or city,
+                    "location": poi.get("location", ""),
+                    "rating": rating,
+                    "price_range": f"{cost}元起" if cost else "",
+                    "type": poi.get("type", "") or preference or "酒店",
+                    "estimated_cost": cost or 400,
+                    "photo_url": photo_url,
+                    "source": "amap",
+                })
+        except Exception:
+            continue
+
+    if not all_hotels:
+        return {"success": False, "error": "未找到匹配的酒店", "city": city, "hotels": []}
+
+    # ── 质量评分 & 排序 ──
+    def _hotel_score(h: dict) -> float:
+        s = 0.0
+        try:
+            s += float(h.get("rating", 0) or 0) * 0.5
+        except ValueError:
+            pass
+        cost = h.get("estimated_cost", 0) or 0
+        # 价格在预算范围内加分
+        if _price_min > 0 and _price_max > 0:
+            if _price_min <= cost <= _price_max:
+                s += 2.0
+            elif cost < _price_min:
+                s += 0.5  # 太便宜也不扣太多
+        # 名称信号：含"国际/度假/豪"加分，含"布丁/如家/汉庭/海友"减分
+        name = h.get("name", "")
+        if any(t in name for t in ["国际", "度假", "豪", "皇冠", "希尔顿", "万豪", "洲际", "凯悦", "香格里拉"]):
+            s += 3.0
+        if any(t in name for t in ["布丁", "如家", "汉庭", "海友", "7天", "锦江之星", "莫泰"]):
+            s -= 2.0
+        # 有照片加分
+        if h.get("photo_url"):
+            s += 0.5
+        return s
+
+    all_hotels.sort(key=_hotel_score, reverse=True)
+
+    # 如果有价格范围，先过滤不在范围内的
+    if _price_min > 0 and _price_max > 0:
+        in_range = [h for h in all_hotels if _price_min <= (h.get("estimated_cost") or 0) <= _price_max]
+        if len(in_range) >= count:
+            all_hotels = in_range
+        else:
+            # 保留范围内+得分最高的补足
+            out_range = [h for h in all_hotels if h not in in_range]
+            all_hotels = in_range + out_range
+
+    result = all_hotels[:count]
+    return {"success": True, "city": city, "count": len(result), "hotels": result,
+            "keyword_used": keywords_to_try[0] if keywords_to_try else "酒店"}
 
 
 def _get_current_gps() -> dict:
@@ -1055,10 +1170,17 @@ def start_navigation(destination: str, city: str = "") -> dict:
             logger.warning("语义地点查询失败: %s", e)
 
     # Step 1: 获取起点坐标（无 GPS 时默认上海市中心）
+    # 注意：浏览器 GPS 返回 WGS-84；上海回退坐标 31.2304,121.4737 是 GCJ-02，
+    # 需转成 WGS-84 再传给 plan()，否则内部二次偏转导致起点偏移。
     gps = _get_current_gps()
-    from_lat = float(gps["lat"]) if gps and gps.get("lat") else 31.2304
-    from_lon = float(gps["lon"]) if gps and gps.get("lon") else 121.4737
-    gps_source = gps.get("source", "fallback_shanghai") if gps else "fallback_shanghai"
+    if gps and gps.get("lat"):
+        from_lat = float(gps["lat"])
+        from_lon = float(gps["lon"])
+        gps_source = gps.get("source", "location_store")
+    else:
+        from modules.ai.navigation_service import _gcj02_to_wgs84
+        from_lat, from_lon = _gcj02_to_wgs84(31.2304, 121.4737)
+        gps_source = "fallback_shanghai"
 
     # Step 2: 用免费 NavigationService 规划路线（OSRM + Nominatim + 离线降级）
     from modules.ai.navigation_service import get_navigation_service
@@ -1067,6 +1189,9 @@ def start_navigation(destination: str, city: str = "") -> dict:
     result["origin_source"] = gps_source
     if gps_source == "fallback_shanghai":
         result.setdefault("origin", "上海市中心（未获取到真实定位）")
+    # 安全兜底：确保 origin_coords 总是有值，供前端绘制起点标记
+    result.setdefault("origin_coords", [from_lat, from_lon])
+    result.setdefault("origin", "当前位置")
 
     # Step 3: 高德深链增强（有 Key 时附上，可一键跳转 App）
     try:
@@ -1090,21 +1215,26 @@ def plan_trip(
     origin: str = "",
     waypoints: Optional[list] = None,
     forbidden_cities: Optional[list] = None,
+    query: str = "",
 ) -> dict:
     """Generate a structured trip plan via the dedicated trip planner."""
     logger.info(
-        "plan_trip: origin=%s, city=%s, waypoints=%s, forbidden_cities=%s, days=%s, preference=%s",
+        "plan_trip: origin=%s, city=%s, waypoints=%s, forbidden_cities=%s, days=%s, preference=%s, query=%s",
         origin,
         city,
         waypoints,
         forbidden_cities,
         days,
         preference,
+        query[:100] if query else "",
     )
     try:
         from modules.ai.trip_planner import get_trip_planner_agent
+        # 优先使用用户原始请求作为 query，保留所有约束条件（must_go/avoid/age_groups 等）
+        # 如果 LLM 未传 query，回退到简单拼接
+        effective_query = query or f"{origin + '到' if origin else ''}{city}{days}日游"
         result = get_trip_planner_agent().plan_from_text(
-            query=f"{origin + '到' if origin else ''}{city}{days}日游",
+            query=effective_query,
             city=city,
             days=days,
             preference=preference,

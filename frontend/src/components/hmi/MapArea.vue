@@ -9,8 +9,8 @@
         <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/15">
           <Navigation class="h-5 w-5 text-primary" />
         </div>
-        <div>
-          <div class="text-sm font-medium">{{ nav.nextTurn || '导航待命中' }}</div>
+        <div class="min-w-0">
+          <div class="truncate text-sm font-medium">{{ nav.nextTurn || '导航待命中' }}</div>
           <div class="text-xs text-muted-foreground">
             <template v-if="nav.destination">
               目的地 {{ nav.destination }}
@@ -19,14 +19,33 @@
               说出"导航到..."开始规划路线
             </template>
           </div>
+          <div v-if="nav.destination" class="mt-0.5 text-[10px]" :class="originStatusClass">
+            {{ originStatusText }}
+            <span v-if="nav.routeSource" class="ml-1 text-muted-foreground/70">· {{ nav.routeSource === 'amap' ? '高德路线' : nav.routeSource === 'osrm' ? 'OSRM路线' : '估算' }}</span>
+          </div>
         </div>
       </div>
-      <div class="flex items-center gap-4 text-right">
+      <div class="flex shrink-0 items-center gap-4 text-right">
         <div>
           <div class="font-mono text-lg font-semibold tabular-nums text-primary">
             {{ nav.etaMin || '--' }}<span class="ml-0.5 text-xs font-normal text-muted-foreground">分钟</span>
           </div>
           <div class="text-[11px] text-muted-foreground">{{ nav.distanceKm || '--' }} km</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Route steps panel (when navigation steps available) -->
+    <div v-if="nav.steps && nav.steps.length > 0" class="absolute left-3 top-20 z-[1000] w-64 max-h-[45%] overflow-y-auto rounded-xl bg-card/90 p-3 backdrop-blur-md shadow-lg">
+      <div class="mb-2 flex items-center gap-1.5">
+        <Route class="h-3.5 w-3.5 text-primary" />
+        <span class="text-xs font-semibold">路线指引</span>
+        <span class="ml-auto text-[10px] text-muted-foreground">{{ nav.steps.length }} 步</span>
+      </div>
+      <div class="flex flex-col gap-1.5">
+        <div v-for="(step, i) in nav.steps" :key="i" class="flex items-start gap-2 text-xs">
+          <span class="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 font-mono text-[9px] text-primary">{{ i + 1 }}</span>
+          <span class="text-foreground/80">{{ step }}</span>
         </div>
       </div>
     </div>
@@ -111,8 +130,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { Navigation, Plus, Minus, MapPin, Maximize2 } from '@lucide/vue'
+import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { Navigation, Plus, Minus, MapPin, Maximize2, Route } from '@lucide/vue'
 import { cn } from '@/lib/utils'
 import type { NavInfo } from '@/lib/edgeguard'
 import L from 'leaflet'
@@ -121,9 +140,17 @@ import 'leaflet/dist/leaflet.css'
 const props = defineProps<{
   nav: NavInfo
   cameraReady: boolean
+  visible: boolean
 }>()
 
 const camLarge = ref(false)
+
+// v-show 隐藏再显示时 Leaflet 需要重新计算容器尺寸
+watch(() => props.visible, (v) => {
+  if (v && mapInstance) {
+    nextTick(() => mapInstance!.invalidateSize())
+  }
+})
 const cameraCanvas = ref<HTMLCanvasElement | null>(null)
 const mapContainer = ref<HTMLDivElement | null>(null)
 let mapInstance: L.Map | null = null
@@ -132,6 +159,16 @@ let routeLayer: L.Polyline | null = null
 let originMarker: L.Marker | null = null
 let destinationMarker: L.Marker | null = null
 let geocodeRequestSeq = 0
+
+const originStatusText = computed(() => {
+  if (props.nav.originSource === 'fallback_shanghai') return '起点：默认上海市中心（未获取真实定位）'
+  if (props.nav.originSource) return '起点：真实定位'
+  return props.nav.originCoords ? '起点：已定位' : '起点：等待定位'
+})
+
+const originStatusClass = computed(() =>
+  props.nav.originSource === 'fallback_shanghai' ? 'text-amber-400' : 'text-emerald-400',
+)
 
 // ── Leaflet map init ──
 function initMap() {
@@ -187,18 +224,29 @@ function clearRoute() {
 
 function setRouteMarker(coords: [number, number], label: string, role: 'origin' | 'destination') {
   if (!mapInstance) return null
-  const marker = L.circleMarker(coords, {
-    radius: role === 'origin' ? 7 : 8,
-    color: role === 'origin' ? '#22c55e' : '#38bdf8',
-    fillColor: role === 'origin' ? '#22c55e' : '#38bdf8',
-    fillOpacity: 1,
-    weight: 3,
-  }).addTo(mapInstance).bindPopup(label)
+  // 高德风格标记：圆形带字母 A(起点/绿色) 或 B(终点/红色)
+  const color = role === 'origin' ? '#22c55e' : '#ef4444'
+  const letter = role === 'origin' ? 'A' : 'B'
+  const icon = L.divIcon({
+    className: 'nav-route-marker',
+    html: `<div style="
+      display:flex;align-items:center;justify-content:center;
+      width:28px;height:28px;border-radius:50% 50% 50% 0;
+      transform:rotate(-45deg);
+      background:${color};border:2px solid #fff;
+      box-shadow:0 2px 6px rgba(0,0,0,0.4);
+    "><span style="transform:rotate(45deg);color:#fff;font-weight:700;font-size:12px;">${letter}</span></div>`,
+    iconSize: [28, 28],
+    iconAnchor: [4, 28],  // 锚点在底部尖端
+  })
+  const marker = L.marker(coords, { icon }).addTo(mapInstance).bindPopup(label)
   return marker
 }
 
 function renderRoute() {
   if (!mapInstance) return false
+  // 确保地图容器尺寸正确（容器从隐藏切换到可见时 Leaflet 需要重新计算）
+  mapInstance.invalidateSize()
   const geometry = props.nav.geometry?.filter(
     (point): point is [number, number] =>
       Array.isArray(point) &&
@@ -276,6 +324,7 @@ function zoomOut() { mapInstance?.zoomOut() }
 // Watch nav destination changes to fly to location
 watch(() => props.nav.destination, async (dest) => {
   if (!dest || !mapInstance) return
+  // 如果已有路线数据（geometry 或坐标），直接渲染路线，不走 geocode 降级
   if (renderRoute()) return
   const seq = ++geocodeRequestSeq
   // 通过后端代理调用高德地理编码（避免暴露 API Key）
@@ -283,6 +332,11 @@ watch(() => props.nav.destination, async (dest) => {
     const resp = await fetch(`/api/map/geocode?address=${encodeURIComponent(dest)}`)
     const data = await resp.json()
     if (seq !== geocodeRequestSeq) return
+    // 二次检查：geocode 期间路线数据可能已到达，此时不应覆盖已渲染的路线
+    if (props.nav.geometry?.length || props.nav.destinationCoords) {
+      renderRoute()
+      return
+    }
     if (data.success && data.lat != null && data.lng != null) {
       clearRoute()
       mapInstance!.setView([data.lat, data.lng], 14)
@@ -295,10 +349,18 @@ watch(() => props.nav.destination, async (dest) => {
   } catch { /* geocode failed */ }
 })
 
+// Watch route data changes — 用 geometry.length 替代 deep watch，
+// 避免 8000+ 点的 geometry 数组深度遍历导致卡顿
 watch(
-  () => [props.nav.geometry, props.nav.originCoords, props.nav.destinationCoords, props.nav.destination],
-  () => { renderRoute() },
-  { deep: true },
+  () => [
+    props.nav.geometry?.length || 0,
+    props.nav.originCoords?.[0] || 0,
+    props.nav.destinationCoords?.[0] || 0,
+    props.nav.destination,
+  ],
+  () => {
+    if (mapInstance) renderRoute()
+  },
 )
 
 // ── Camera frame rendering ──

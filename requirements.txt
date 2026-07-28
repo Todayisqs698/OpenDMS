@@ -1,12 +1,19 @@
 # EdgeGuard — 车载多模态AI系统
 # 安装: pip install -r requirements.txt
+#
+# 外部服务依赖（非 Python）：
+#   网易云音乐 API → cd tools/netease-cloud-music-api && npm install && node app.js
+#   （默认监听 localhost:3000，歌曲搜索/播放必需）
+#   PyExecJS → 小红书签名引擎运行 JS 所需（可选，缺失则 XHS 降级）
+PyExecJS>=1.5.1
 
 # 视觉 & 感知
 opencv-python>=4.8.0
 mediapipe>=0.10.30
 numpy>=1.24.0
 
-# 手势识别 (MediaPipe Tasks API, 不需要 TensorFlow)
+# 手势识别 (MediaPipe Tasks API + TFLite 分类器)
+tensorflow>=2.15.0
 
 # 语音
 sounddevice>=0.5.2

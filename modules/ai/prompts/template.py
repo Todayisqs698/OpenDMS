@@ -8,7 +8,7 @@ PromptTemplate — 标准化 Prompt 模板数据结构
   - 降级模板（参数缺失时的兜底）
 """
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import List, Tuple
 from datetime import datetime
 
 
@@ -25,11 +25,11 @@ class PromptTemplate:
 
     # ── 模板内容 ──
     content: str = ""                # 模板正文，支持 {param} 占位符
-    params: list[str] = field(default_factory=list)  # 需要的参数列表
+    params: List[str] = field(default_factory=list)  # 需要的参数列表
     fallback_content: str = ""       # 参数缺失时的降级模板
 
     # ── 标签（支持多维度检索）──
-    tags: list[str] = field(default_factory=list)    # 如 ["safety", "distracted", "warning"]
+    tags: List[str] = field(default_factory=list)    # 如 ["safety", "distracted", "warning"]
     risk_level: str = "normal"       # 关联的安全等级
 
     # ── 元信息 ──
@@ -52,7 +52,7 @@ class PromptTemplate:
                     pass
             raise KeyError(f"模板 {self.id} 缺少参数: {e}，且无可用降级模板")
 
-    def validate_params(self, **kwargs) -> tuple[bool, list[str]]:
+    def validate_params(self, **kwargs) -> Tuple[bool, List[str]]:
         """检查参数是否满足模板要求。返回 (是否有效, 缺失参数列表)。"""
         missing = [p for p in self.params if p not in kwargs]
         return len(missing) == 0, missing

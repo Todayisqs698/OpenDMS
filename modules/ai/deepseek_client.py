@@ -52,6 +52,15 @@ class DeepSeekClient:
         )
         self.conversation_history = []
 
+    def reload(self) -> None:
+        """重新读取 API Key 并重建客户端（运行时配置热更新后调用）。"""
+        self._api_key = os.getenv('DEEPSEEK_API_KEY', '')
+        self.client = OpenAI(
+            api_key=self._api_key,
+            base_url="https://api.deepseek.com"
+        )
+        self.conversation_history = []
+
     @property
     def is_available(self) -> bool:
         """DeepSeek API 是否可用（Key 已配置且在线）"""

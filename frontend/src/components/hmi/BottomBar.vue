@@ -30,6 +30,7 @@
               <div class="min-w-0 flex-1">
                 <div class="text-lg font-semibold">{{ musicState.current_song?.name || '未在播放' }}</div>
                 <div class="mt-1 text-sm text-muted-foreground">{{ musicState.current_song?.artist || '' }}</div>
+                <div v-if="musicError" class="mt-2 text-xs text-danger">{{ musicError }}</div>
                 <div class="mt-4 h-1.5 overflow-hidden rounded-full bg-card"><div class="h-full w-2/5 bg-primary" /></div>
               </div>
             </div>
@@ -94,7 +95,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import type { CameraHeaders } from '@/composables/useTelemetry'
 import { Hand, Music, Pause, Play, Search, SkipBack, SkipForward, Sparkles, Volume1, Wind, X } from '@lucide/vue'
 import { cn } from '@/lib/utils'
@@ -120,13 +121,48 @@ const musicState = ref<MusicState>({ playing: false, current_song: { id: 0, name
 
 // ── 音频播放器 ──
 const audioRef = ref<HTMLAudioElement | null>(null)
+const musicError = ref('')
+
+async function playCurrentAudio() {
+  const audio = audioRef.value
+  const url = musicState.value.current_song?.url
+  if (!audio || !url) {
+    musicError.value = musicState.value.message || '无可播放的音频源'
+    return
+  }
+  const absoluteUrl = new URL(url, window.location.origin).href
+  if (audio.src !== absoluteUrl) {
+    audio.src = url
+    audio.load()
+  }
+  audio.volume = musicState.value.volume / 100
+  try {
+    await audio.play()
+    musicError.value = ''
+  } catch (err) {
+    // 浏览器自动播放策略阻止 → 回退 playing 状态，提示用户手动点击播放
+    const msg = err instanceof Error ? err.message : ''
+    if (msg.includes('NotAllowed') || msg.includes('not allowed')) {
+      musicState.value = { ...musicState.value, playing: false }
+      musicError.value = '浏览器阻止自动播放，请点击下方播放按钮'
+    } else {
+      musicError.value = msg || '音频播放失败'
+    }
+  }
+}
+
+function syncMusicState(data: MusicState, status = 'ok', message = '') {
+  musicState.value = { ...musicState.value, ...data }
+  musicError.value = message || data.message || ''
+  if (status === 'ok' && musicState.value.playing) void playCurrentAudio()
+}
 
 watch(() => musicState.value.current_song?.url, (url) => {
   if (!url || !audioRef.value) return
   audioRef.value.src = url
   audioRef.value.load()
   if (musicState.value.playing) {
-    audioRef.value.play().catch(() => {})
+    void playCurrentAudio()
   }
 })
 
@@ -134,7 +170,7 @@ watch(() => musicState.value.playing, (playing) => {
   if (!audioRef.value) return
   if (playing) {
     if (audioRef.value.src && audioRef.value.paused) {
-      audioRef.value.play().catch(() => {})
+      void playCurrentAudio()
     }
   } else {
     audioRef.value.pause()
@@ -142,11 +178,12 @@ watch(() => musicState.value.playing, (playing) => {
 })
 const musicSearch = ref('')
 const searchResults = ref<SongInfo[]>([])
+let musicPollTimer: ReturnType<typeof setInterval> | undefined
 
 async function fetchMusicState() {
   try {
     const r = await fetch('/api/music/state'); const d = await r.json()
-    if (d.status === 'ok' && d.data) musicState.value = { ...musicState.value, ...d.data }
+    if (d.data) syncMusicState(d.data, d.status, d.message)
   } catch { /* ignore */ }
 }
 async function doMusicSearch() {
@@ -161,25 +198,25 @@ async function playSong(id: number) {
   try {
     const r = await fetch('/api/music/play', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ song_id: id }) })
     const d = await r.json()
-    if (d.status === 'ok' && d.data) { musicState.value = { ...musicState.value, ...d.data }; searchResults.value = []; musicSearch.value = '' }
+    if (d.data) { syncMusicState(d.data, d.status, d.message); searchResults.value = []; musicSearch.value = '' }
   } catch { /* ignore */ }
 }
 async function musicTogglePlay() {
   try {
     const r = await fetch('/api/music/pause', { method: 'POST' }); const d = await r.json()
-    if (d.status === 'ok' && d.data) musicState.value = { ...musicState.value, ...d.data }
+    if (d.data) syncMusicState(d.data, d.status, d.message)
   } catch { /* ignore */ }
 }
 async function musicNext() {
   try {
     const r = await fetch('/api/music/next', { method: 'POST' }); const d = await r.json()
-    if (d.status === 'ok' && d.data) musicState.value = { ...musicState.value, ...d.data }
+    if (d.data) syncMusicState(d.data, d.status, d.message)
   } catch { /* ignore */ }
 }
 async function musicPrev() {
   try {
     const r = await fetch('/api/music/prev', { method: 'POST' }); const d = await r.json()
-    if (d.status === 'ok' && d.data) musicState.value = { ...musicState.value, ...d.data }
+    if (d.data) syncMusicState(d.data, d.status, d.message)
   } catch { /* ignore */ }
 }
 
@@ -200,5 +237,6 @@ async function fetchAcTemp() {
   } catch { /* ignore */ }
 }
 
-onMounted(() => { fetchAcTemp(); fetchMusicState() })
+onMounted(() => { fetchAcTemp(); fetchMusicState(); musicPollTimer = setInterval(fetchMusicState, 2000) })
+onUnmounted(() => { if (musicPollTimer) clearInterval(musicPollTimer) })
 </script>

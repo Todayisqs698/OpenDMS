@@ -1,6 +1,7 @@
 """摄像头引擎 — 采集 + HUD + 5类独立告警 + 状态推送 + 语音管线"""
 import os
 import time, logging, threading, cv2, numpy as np
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +25,16 @@ _show_landmarks = True
 _lock = threading.Lock()
 _audio_pipeline = None  # 音频管线实例
 
-# ── 告警防抖参数 ──
-_ALERT_DEBOUNCE_FRAMES = 8     # 连续N帧同等级才触发告警（~0.4s@20fps）
-_ALERT_COOLDOWN_SEC = 6.0      # 两次TTS播报最小间隔
-_last_alert_state = {"severity": "normal", "count": 0, "time": 0.0}
 _last_safety_trigger = {"time": 0}  # 安全干预冷却
 _SAFETY_COOLDOWN_SEC = 15  # 两次干预最小间隔
+
+_PERCLOS_WINDOW_SEC = 30.0
+_MIN_VALID_PERCLOS_SEC = 8.0
+_MAX_SAMPLE_GAP_SEC = 0.50
+_SLIGHT_CLOSED_SEC = 1.10
+_SEVERE_CLOSED_SEC = 2.50
+_SLIGHT_PERCLOS = 0.30
+_SEVERE_PERCLOS = 0.52
 
 
 def set_landmarks(show: bool):
@@ -53,7 +58,7 @@ def _loop(ws_manager):
     global _frame, _state, _audio_pipeline
 
     from modules.vision.face_tracker import FaceTracker
-    from modules.ai.local_decision_engine import decide_locally, check_crowd, check_absence, check_fatigue, check_head_deviation, check_gaze_deviation
+    from modules.ai.local_decision_engine import decide_locally, check_crowd, check_absence, check_fatigue
 
     ft = FaceTracker()
 
@@ -103,7 +108,6 @@ def _loop(ws_manager):
         "head":     {"last": "center",  "start": time.time(), "back_at": 0},
         "gaze":     {"last": "center",  "start": time.time(), "back_at": 0},
     }
-
     def _get_duration(key: str, active: bool, now: float) -> float:
         """通用计时器：活动时累加，回正需持续 1s 才清零（防抖）"""
         t = timers[key]
@@ -124,13 +128,15 @@ def _loop(ws_manager):
                 return 0
 
     # ── 疲劳追踪 ──
-    from collections import deque
-    ear_history = deque(maxlen=60)
+    perclos_samples = deque()
     blink_history = deque(maxlen=60)
     last_blink_total = ft.blink_count
     fatigue_score = 0
     fatigue_level = "normal"
     perclos_val = 0.0
+    perclos_valid_sec = 0.0
+    closed_duration = 0.0
+    closed_started_at = 0.0
     fatigue_active = False
 
     # ── 多人检测计数器 ──
@@ -156,51 +162,88 @@ def _loop(ws_manager):
         ft.refresh(img, rgb=rgb)
         face_ok = ft.is_face_detected()
         gaze = ft.gaze_state if face_ok else "lost"
+        head_pose = ft.head_pose() if face_ok else {"pitch": 0, "yaw": 0, "roll": 0}
         blink = ft.is_blinking() if face_ok else False
 
-        # ── 疲劳指标计算（每帧更新）──
+        # ── DrivePilot-Cockpit 风格疲劳指标：闭眼持续时间 + 时间加权 PERCLOS ──
         if face_ok:
-            ear_history.append(ft.ear)
             blink_now = ft.blink_count
             blink_delta = max(0, blink_now - last_blink_total)
             blink_history.append(blink_delta)
             last_blink_total = blink_now
-            closed_frames = sum(1 for e in ear_history if e < ft.ear_threshold * ft.BLINK_RATIO)
-            perclos_val = round(closed_frames / max(len(ear_history), 1), 3)
             blink_rate_val = round(sum(blink_history) * 60.0 / max(len(blink_history), 1), 1)
-            if perclos_val > 0.15:
-                fatigue_score = min(100, int(40 + (perclos_val - 0.15) / 0.1 * 60))
-                fatigue_level = "danger"
-            elif perclos_val > 0.08:
-                fatigue_score = min(100, int(20 + (perclos_val - 0.08) / 0.07 * 20))
-                fatigue_level = "warning"
+
+            eyes_closed = bool(ft.ear_threshold and ft.ear < ft.ear_threshold * ft.BLINK_RATIO)
+            if eyes_closed:
+                if not closed_started_at:
+                    closed_started_at = now
+                closed_duration = now - closed_started_at
             else:
-                fatigue_score = max(0, int(perclos_val / 0.08 * 20))
+                closed_started_at = 0.0
+                closed_duration = 0.0
+
+            perclos_samples.append((now, eyes_closed))
+            while perclos_samples and perclos_samples[0][0] < now - _PERCLOS_WINDOW_SEC:
+                perclos_samples.popleft()
+
+            closed_seconds = 0.0
+            perclos_valid_sec = 0.0
+            samples = list(perclos_samples)
+            for index, (sample_time, sample_closed) in enumerate(samples):
+                next_time = samples[index + 1][0] if index + 1 < len(samples) else now
+                duration = min(max(0.0, next_time - sample_time), _MAX_SAMPLE_GAP_SEC)
+                perclos_valid_sec += duration
+                if sample_closed:
+                    closed_seconds += duration
+            perclos_val = round(closed_seconds / perclos_valid_sec, 3) if perclos_valid_sec > 0 else 0.0
+
+            severe_fatigue = (
+                closed_duration >= _SEVERE_CLOSED_SEC
+                or (perclos_valid_sec >= _MIN_VALID_PERCLOS_SEC and perclos_val >= _SEVERE_PERCLOS)
+            )
+            slight_fatigue = (
+                closed_duration >= _SLIGHT_CLOSED_SEC
+                or (perclos_valid_sec >= _MIN_VALID_PERCLOS_SEC and perclos_val >= _SLIGHT_PERCLOS)
+            )
+
+            if severe_fatigue:
+                fatigue_level = "danger"
+                fatigue_score = 90
+            elif slight_fatigue:
+                fatigue_level = "warning"
+                fatigue_score = 55
+            else:
                 fatigue_level = "normal"
+                fatigue_score = max(0, min(35, int(perclos_val / max(_SLIGHT_PERCLOS, 0.001) * 35)))
             fatigue_active = fatigue_level in ("warning", "danger")
         else:
-            ear_history.append(0.3)
             blink_history.append(0)
             blink_rate_val = 0
+            closed_started_at = 0.0
+            perclos_samples.clear()
+            perclos_valid_sec = 0.0
+            perclos_val = 0.0
             fatigue_active = False
 
         # ── 5 类独立计时 ──
         crowd_dur = _get_duration("crowd", crowd_face_count >= 2, now)
         absence_dur = _get_duration("absence", not face_ok, now)
-        fatigue_dur = _get_duration("fatigue", fatigue_active, now)
-        head_dur = _get_duration("head", face_ok and gaze != "center" and gaze != "lost", now)
-        gaze_dur = _get_duration("gaze", face_ok and gaze != "center" and gaze != "lost", now)
+        _get_duration("fatigue", fatigue_active, now)
+        fatigue_dur = closed_duration
+        if perclos_valid_sec >= _MIN_VALID_PERCLOS_SEC:
+            if perclos_val >= _SEVERE_PERCLOS:
+                fatigue_dur = max(fatigue_dur, _SEVERE_CLOSED_SEC)
+            elif perclos_val >= _SLIGHT_PERCLOS:
+                fatigue_dur = max(fatigue_dur, _SLIGHT_CLOSED_SEC)
+        head_dur = 0.0
+        gaze_dur = 0.0
 
-        # ── 5 类独立决策（优先级：crowd > absence > fatigue > head > gaze）──
+        # ── DrivePilot-Cockpit 风格：实时安全告警只使用疲劳/无人脸/多人等稳定信号 ──
         result = check_crowd(crowd_dur, crowd_face_count)
         if result.get("action_code") == "normal":
             result = check_absence(absence_dur)
         if result.get("action_code") == "normal":
             result = check_fatigue(fatigue_dur)
-        if result.get("action_code") == "normal":
-            result = check_head_deviation(gaze if face_ok else "center", head_dur)
-        if result.get("action_code") == "normal":
-            result = check_gaze_deviation(gaze if face_ok else "center", gaze_dur)
 
         # ── 手势决策：独立评估，仅 severe 安全告警阻塞手势指令 ──
         gesture_result = None
@@ -231,10 +274,10 @@ def _loop(ws_manager):
             _last_safety_trigger["time"] = now
             category = result.get("alert_category", "unknown")
             label = result.get("alert_label", "")
-            tts_text = (
-                "警告！检测到危险驾驶状态，请立即注视前方！"
-                if severity == "severe" else "请注意前方路况，保持专注驾驶。"
-            )
+            if severity == "severe":
+                tts_text = "警告！检测到危险驾驶状态，请立即注视前方！"
+            else:
+                tts_text = "请注意前方路况，保持专注驾驶。"
             if ws_manager:
                 ws_manager.broadcast_sync({
                     "type": "safety_alert",
@@ -336,6 +379,7 @@ def _loop(ws_manager):
             print(f"[camera] STATE action={stored_action} gesture={gesture_name} hold={gesture_action_hold} until={gesture_action_until:.1f}", flush=True)
             _state = {
                 "gaze": gaze, "gesture": gesture_name,
+                "head_pose": head_pose,
                 "gesture_hint": gesture_name,
                 "gesture_action": gesture_result.get("action_code", "") if gesture_result else "",
                 "confidence": round(result.get("confidence", 0.8), 2),
@@ -348,6 +392,7 @@ def _loop(ws_manager):
                     crowd_dur, absence_dur, fatigue_dur, head_dur, gaze_dur
                 ), 1),
                 "perclos": perclos_val,
+                "perclos_valid_sec": round(perclos_valid_sec, 1),
                 "blink_rate": blink_rate_val,
                 "fatigue_score": fatigue_score,
                 "fatigue_level": fatigue_level,

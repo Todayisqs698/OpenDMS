@@ -102,11 +102,12 @@
           <Sparkles class="h-4 w-4 text-primary" /><span class="text-xs font-medium text-primary">EdgeGuard</span>
           <button type="button" aria-label="朗读回复" class="ml-auto flex h-6 w-6 items-center justify-center rounded-md text-primary hover:bg-primary/15" title="朗读此回复" @click="lastAssistant && emit('speak-reply', lastAssistant.text)"><Volume2 class="h-3.5 w-3.5" /></button>
         </div>
-        <p class="text-lg leading-relaxed text-pretty">{{ lastAssistant.text }}</p>
+        <div class="markdown-body text-lg leading-relaxed text-pretty" v-html="renderMarkdown(lastAssistant.text)"></div>
       </div>
       <div class="flex flex-col gap-2">
         <div v-for="m in messages" :key="m.id" :class="cn('flex', m.role === 'user' ? 'justify-end' : 'justify-start')">
-          <div :class="cn('max-w-[85%] rounded-2xl px-3 py-2 text-sm leading-relaxed', m.role === 'user' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-foreground')">{{ m.text }}</div>
+          <div v-if="m.role === 'assistant'" class="markdown-body max-w-[85%] rounded-2xl px-3 py-2 text-sm leading-relaxed bg-secondary text-foreground" v-html="renderMarkdown(m.text)"></div>
+          <div v-else class="max-w-[85%] rounded-2xl px-3 py-2 text-sm leading-relaxed bg-primary text-primary-foreground">{{ m.text }}</div>
         </div>
       </div>
 
@@ -149,6 +150,7 @@
 import { ref, computed } from 'vue'
 import { AlertTriangle, ArrowDown, ChevronDown, ChevronRight, CircleCheck, Cloud, MapPin, Mic, Navigation, Send, Shield, Slash, Sparkles, Volume2, X, XCircle } from '@lucide/vue'
 import { cn } from '@/lib/utils'
+import { renderMarkdown } from '@/lib/markdown'
 import { agentRoutes, mockAgentResults, mockAgentTrace, quickReplies, safetyGateMap, type AgentRoute, type AgentTraceStep, type ChatMessage, type SafetyLevel } from '@/lib/edgeguard'
 
 const props = defineProps<{ messages: ChatMessage[] }>()

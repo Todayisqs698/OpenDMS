@@ -31,12 +31,18 @@ import os
 import time
 from typing import Optional
 
+from dotenv import load_dotenv
+
+# 加载项目根目录 .env（3 级上溯到 edgeguard/），确保 AMAP_API_KEY 可用
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), '.env'))
+
 logger = logging.getLogger(__name__)
 
 # 免费公开 API（无需 key）
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 OSRM_URL = "https://router.project-osrm.org/route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson"
 AMAP_GEOCODE_URL = "https://restapi.amap.com/v3/geocode/geo"
+AMAP_POI_URL = "https://restapi.amap.com/v3/place/text"
 AMAP_DRIVING_URL = "https://restapi.amap.com/v3/direction/driving"
 
 # 地球半径（km），用于直线距离估算
@@ -129,54 +135,75 @@ class NavigationService:
                 return amap_result
 
         # 2. Geocode destination for the OSRM/free fallback path.
+        # _geocode() 统一返回 GCJ-02（与前端高德瓦片一致）
         dst_coords = self._geocode(destination)
         if dst_coords is None:
             return self._fail(f"无法定位目的地「{destination}」")
-        dst_lat, dst_lon = dst_coords
+        dst_lat, dst_lon = dst_coords  # GCJ-02
 
-        # 2. 无起点（无 GPS）→ 直线估算降级
+        # 2. 无起点（无 GPS）→ 直线估算降级（仍生成直线 geometry 供地图绘制）
         if from_lat is None or from_lon is None:
-            dist = self._haversine(39.9042, 116.4074, dst_lat, dst_lon)  # 默认北京
+            default_lat, default_lon = 39.9042, 116.4074  # 默认北京（GCJ-02）
+            dist = self._haversine(default_lat, default_lon, dst_lat, dst_lon)
             result = {
                 "success": True,
                 "destination": destination,
+                "origin": "默认位置（未获取到GPS）",
+                "origin_coords": None,
                 "destination_coords": [dst_lat, dst_lon],
                 "distance_km": round(dist, 1),
                 "duration_min": round(dist / 40 * 60, 1),  # 假设均速40km/h
                 "steps": ["未获取到车辆GPS，已按直线距离估算，请在导航仪确认实际路线"],
-                "geometry": [],
+                "geometry": [[default_lat, default_lon], [dst_lat, dst_lon]],
+                "coordinate_system": "gcj02",
                 "route_summary": f"距「{destination}」约 {dist:.0f} 公里（估算）",
                 "source": "fallback",
             }
             self._cache[cache_key] = (result, now)
             return result
 
-        # 3. 路线规划
-        route = self._route_osrm(from_lat, from_lon, dst_lat, dst_lon)
+        # GPS 坐标（WGS-84）→ GCJ-02，供前端高德瓦片直接使用
+        origin_gcj_lat, origin_gcj_lon = _wgs84_to_gcj02(from_lat, from_lon)
+
+        # 3. 路线规划（OSRM 需要 WGS-84 输入，需将 GCJ-02 目的地转回 WGS-84）
+        dst_w_lat, dst_w_lon = _gcj02_to_wgs84(dst_lat, dst_lon)
+        route = self._route_osrm(from_lat, from_lon, dst_w_lat, dst_w_lon)
         if route is None:
-            dist = self._haversine(from_lat, from_lon, dst_lat, dst_lon)
+            dist = self._haversine(origin_gcj_lat, origin_gcj_lon, dst_lat, dst_lon)
             result = {
                 "success": True,
                 "destination": destination,
+                "origin": "当前位置",
+                "origin_coords": [origin_gcj_lat, origin_gcj_lon],
                 "destination_coords": [dst_lat, dst_lon],
                 "distance_km": round(dist, 1),
                 "duration_min": round(dist / 40 * 60, 1),
-                "steps": ["路线服务暂不可用，已按直线距离估算"],
-                "geometry": [],
+                "steps": ["路线服务暂不可用，已按直线距离估算，请参考高德地图App获取详细路线"],
+                "geometry": [[origin_gcj_lat, origin_gcj_lon], [dst_lat, dst_lon]],
+                "coordinate_system": "gcj02",
                 "route_summary": f"距「{destination}」约 {dist:.0f} 公里（估算）",
                 "source": "fallback",
             }
             self._cache[cache_key] = (result, now)
             return result
+
+        # OSRM 返回的 geometry 是 WGS-84，转换为 GCJ-02 供前端高德瓦片使用
+        gcj_geometry = []
+        for p in route["geometry"]:
+            g_lat, g_lon = _wgs84_to_gcj02(p[0], p[1])
+            gcj_geometry.append([g_lat, g_lon])
 
         result = {
             "success": True,
             "destination": destination,
+            "origin": "当前位置",
+            "origin_coords": [origin_gcj_lat, origin_gcj_lon],
             "destination_coords": [dst_lat, dst_lon],
             "distance_km": route["distance_km"],
             "duration_min": route["duration_min"],
             "steps": route["steps"],
-            "geometry": route["geometry"],
+            "geometry": gcj_geometry,
+            "coordinate_system": "gcj02",
             "route_summary": f"到「{destination}」约 {route['distance_km']:.0f} 公里，"
                              f"预计 {route['duration_min']:.0f} 分钟",
             "source": "osrm",
@@ -248,10 +275,33 @@ class NavigationService:
             return {"success": False, "source": "amap", "error": str(e)}
 
     def _geocode_amap(self, name: str, amap_key: str):
-        """Geocode with AMap. Coordinates returned by AMap are GCJ-02."""
-        try:
-            import httpx
+        """Geocode with AMap: POI search (ranked, accurate for place names) → geocode fallback.
+        Coordinates returned by AMap are GCJ-02.
+        POI search is preferred because geocoding returns the first address match
+        for ambiguous names like "西湖", which may resolve to the wrong city.
+        """
+        import httpx
 
+        # 1. POI 搜索（优先，对景点/地标名更准确，返回按相关性排序的结果）
+        try:
+            resp = httpx.get(
+                AMAP_POI_URL,
+                params={"keywords": name, "key": amap_key, "offset": 1, "page": 1},
+                timeout=5.0,
+            )
+            data = resp.json()
+            if data.get("status") == "1" and data.get("pois"):
+                poi = data["pois"][0]
+                location = poi.get("location", "")
+                if "," in location:
+                    lng, lat = location.split(",", 1)
+                    logger.info("AMap POI: %s -> %s (%s)", name, poi.get("name"), location)
+                    return float(lat), float(lng), poi.get("name", name)
+        except Exception as e:
+            logger.debug("AMap POI search failed: %s", e)
+
+        # 2. 地理编码降级（适合详细地址如"北京市朝阳区XX路"）
+        try:
             resp = httpx.get(
                 AMAP_GEOCODE_URL,
                 params={"address": name, "key": amap_key},
@@ -271,12 +321,16 @@ class NavigationService:
             return None
 
     def _geocode(self, name: str):
-        """地理编码：Nominatim 在线查询 → 离线地标表兜底"""
+        """地理编码：Nominatim 在线查询 → 离线地标表兜底
+        统一返回 GCJ-02 坐标（与前端高德瓦片一致）。
+        - Nominatim 返回 WGS-84 → 转换为 GCJ-02
+        - 离线地标表本身即为 GCJ-02（与高德地图一致），无需转换
+        """
         name_clean = (name or "").strip()
         if not name_clean:
             return None
 
-        # 1. 在线查询（Nominatim）
+        # 1. 在线查询（Nominatim）— 返回 WGS-84
         try:
             import httpx
             resp = httpx.get(
@@ -288,11 +342,14 @@ class NavigationService:
             if resp.status_code == 200:
                 data = resp.json()
                 if data:
-                    return float(data[0]["lat"]), float(data[0]["lon"])
+                    w_lat, w_lon = float(data[0]["lat"]), float(data[0]["lon"])
+                    # Nominatim 返回 WGS-84，转换为 GCJ-02 供前端高德瓦片使用
+                    gcj_lat, gcj_lon = _wgs84_to_gcj02(w_lat, w_lon)
+                    return gcj_lat, gcj_lon
         except Exception as e:
             logger.debug(f"Nominatim 在线查询失败: {e}")
 
-        # 2. 离线地标表兜底（覆盖主要城市/景点，演示环境也能用）
+        # 2. 离线地标表兜底（GCJ-02 坐标，与高德地图一致）
         for key, coords in _OFFLINE_LANDMARKS.items():
             if key == name_clean or key in name_clean or name_clean in key:
                 logger.info(f"使用离线地标表匹配: {name_clean} -> {key} {coords}")
@@ -361,7 +418,7 @@ class NavigationService:
             "duration_min": 0,
             "steps": [],
             "geometry": [],
-            "coordinate_system": "wgs84",
+            "coordinate_system": "gcj02",
             "route_summary": msg,
             "source": "error",
         }
@@ -401,6 +458,20 @@ def _wgs84_to_gcj02(lat: float, lon: float) -> tuple[float, float]:
     dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrt_magic) * math.pi)
     dlon = (dlon * 180.0) / (a / sqrt_magic * math.cos(radlat) * math.pi)
     return lat + dlat, lon + dlon
+
+
+def _gcj02_to_wgs84(lat: float, lon: float) -> tuple[float, float]:
+    """GCJ-02 → WGS-84 逆向转换（迭代逼近法）"""
+    if _out_of_china(lat, lon):
+        return lat, lon
+    # 迭代逼近：WGS84 → GCJ02 的正向转换是确定的，
+    # 通过迭代逐步逼近原始 WGS84 坐标
+    w_lat, w_lon = lat, lon
+    for _ in range(10):
+        g_lat, g_lon = _wgs84_to_gcj02(w_lat, w_lon)
+        w_lat -= (g_lat - lat)
+        w_lon -= (g_lon - lon)
+    return w_lat, w_lon
 
 
 # 全局单例

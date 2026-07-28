@@ -109,6 +109,7 @@ export interface NavInfo {
   steps?: string[]
   routeSource?: string
   coordinateSystem?: string
+  originSource?: string
 }
 
 /* ========================== 对话 & Agent ========================== */

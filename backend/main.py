@@ -29,6 +29,8 @@ from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from app.ws.manager import ws_manager
+from app.routes.music import router as music_router
+from app.routes.settings import router as settings_router
 # 数据库持久化
 from backend.app.core.database import insert_alert_record, insert_interaction_record, init_db, create_drive_session, finish_drive_session, set_current_session_id, query_alerts, query_interactions, get_session_summary
 from modules.ai.agent_graph import ReActAgent
@@ -131,7 +133,83 @@ def _emit_orchestrator_steps(response, driver_state: dict, sync_push):
 
 
 def _run_unified_agent_sync(text: str, driver_state: dict, sync_push=None, callbacks: dict = None) -> dict:
-    """Run the canonical AgentOrchestrator path and return the legacy chat-shaped result."""
+    """Run the canonical chat path and return the legacy chat-shaped result."""
+    mode = os.getenv("AGENT_CHAT_MODE", "tool_calling").strip().lower()
+    if mode != "orchestrator":
+        return _run_tool_calling_agent_sync(text, driver_state, sync_push=sync_push)
+
+    return _run_orchestrator_agent_sync(text, driver_state, sync_push=sync_push, callbacks=callbacks)
+
+
+def _run_tool_calling_agent_sync(text: str, driver_state: dict, sync_push=None) -> dict:
+    """Run ReAct function-calling directly, bypassing keyword intent routing."""
+    def noop_push(event_type: str, data: dict):
+        return None
+
+    push = sync_push or noop_push
+    push("step", {
+        "id": "agent_mode",
+        "label": "决策模式：LLM 工具调用",
+        "status": "done",
+        "stage": "agent",
+    })
+
+    def react_callback(event_type: str, data: dict):
+        if event_type == "think":
+            push("step", {
+                "id": f"think_{time.time_ns()}",
+                "label": data.get("thought", "推理中"),
+                "status": "done",
+                "stage": "agent",
+            })
+        elif event_type == "tool_call":
+            push("step", {
+                "id": f"tool_call_{time.time_ns()}",
+                "label": f"调用工具：{data.get('tool', '')}",
+                "status": "running",
+                "stage": "tool",
+                "tool": data.get("tool", ""),
+                "args": data.get("args", {}),
+            })
+        elif event_type == "tool_result":
+            push("step", {
+                "id": f"tool_result_{time.time_ns()}",
+                "label": f"工具完成：{data.get('tool', '')}",
+                "status": "done",
+                "stage": "tool",
+                "tool": data.get("tool", ""),
+                "result": data.get("result", ""),
+            })
+        elif event_type in {"navigation", "attractions", "weather_query", "trip_plan"}:
+            push(event_type, data)
+        elif event_type == "error":
+            push("step", {
+                "id": f"agent_error_{time.time_ns()}",
+                "label": data.get("message", "Agent 执行异常"),
+                "status": "error",
+                "stage": "agent",
+            })
+
+    result = get_react_agent().chat(text, driver_state or {}, callbacks=[react_callback])
+    reply = result.get("reply", "")
+    push("final", {"text": reply})
+    return {
+        "reply": reply,
+        "steps": result.get("steps", 0),
+        "status": result.get("status", "success"),
+        "safety_level": result.get("safety_level", "normal"),
+        "route": "tool_calling",
+        "intent_plan": {
+            "mode": "tool_calling",
+            "intents": [],
+            "needs_clarification": False,
+            "overall_summary": "LLM 直接选择工具执行",
+        },
+    }
+
+
+def _run_orchestrator_agent_sync(text: str, driver_state: dict, sync_push=None, callbacks: dict = None) -> dict:
+    """Run the legacy AgentOrchestrator path and return the legacy chat-shaped result."""
     orch = _get_orchestrator()
 
     def noop_push(event_type: str, data: dict):
@@ -197,34 +275,6 @@ def _fallback_environment(city: str, lat, lon) -> dict:
     }
 
 
-def _scan_local_music(query: str = "") -> list:
-    """扫描 data/music/ 目录的本地音频文件"""
-    results = []
-    if not os.path.isdir(_MUSIC_DIR):
-        return results
-    for fname in sorted(os.listdir(_MUSIC_DIR)):
-        if not fname.lower().endswith(('.mp3', '.wav', '.flac', '.m4a', '.ogg')):
-            continue
-        name = os.path.splitext(fname)[0]
-        artist, title = "本地音乐", name
-        if " - " in name:
-            parts = name.split(" - ", 1)
-            artist, title = parts[0].strip(), parts[1].strip()
-        if query and query.lower() not in name.lower():
-            continue
-        from urllib.parse import quote
-        results.append({
-            "id": hash(fname) % 1000000,
-            "name": title,
-            "artist": artist,
-            "album": "",
-            "duration": 0,
-            "url": f"/static/music/{quote(fname)}",
-            "source": "local",
-        })
-    return results
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动摄像头引擎 + 周期环境广播"""
@@ -288,68 +338,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="EdgeGuard API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.include_router(music_router)
+app.include_router(settings_router)
 app.mount("/static/music", StaticFiles(directory=_MUSIC_DIR), name="music_static")
 
 
 @app.get("/api/health")
 def health():
     return {"status": "ok", "system": "EdgeGuard"}
-
-
-# ── 运行时配置热更新 ─────────────────────────────────────────────────
-from modules.ai.runtime_config import (
-    get_runtime_settings,
-    get_runtime_settings_masked,
-    update_runtime_settings,
-)
-
-
-class SettingsUpdate(BaseModel):
-    """前端设置页提交的配置更新。"""
-    DEEPSEEK_API_KEY: str | None = None
-    AMAP_API_KEY: str | None = None
-    OPENWEATHER_API_KEY: str | None = None
-    XHS_COOKIE: str | None = None
-    LLM_PROVIDER: str | None = None
-    OPENAI_API_KEY: str | None = None
-    HF_ENDPOINT: str | None = None
-
-
-@app.get("/api/settings")
-def get_settings():
-    """读取当前运行时配置（敏感字段脱敏）。"""
-    return {
-        "success": True,
-        "settings": get_runtime_settings_masked(),
-    }
-
-
-@app.post("/api/settings")
-def update_settings(req: SettingsUpdate):
-    """更新运行时配置，立即生效并持久化。
-
-    空字符串视为清除该配置项。
-    敏感字段发送 ***已配置*** 时视为不修改（保留原值）。
-    """
-    # 过滤掉 None 和脱敏占位符
-    updates = {}
-    masked = get_runtime_settings_masked()
-    for key, value in req.model_dump().items():
-        if value is None:
-            continue
-        if value == "***已配置***":
-            continue  # 前端回传的脱敏占位符，不修改
-        updates[key] = value
-
-    if not updates:
-        return {"success": True, "message": "无更新", "settings": get_runtime_settings_masked()}
-
-    update_runtime_settings(updates)
-    return {
-        "success": True,
-        "message": "配置已更新并立即生效",
-        "settings": get_runtime_settings_masked(),
-    }
 
 
 @app.get("/api/tts")
@@ -1091,16 +1087,27 @@ def nav_route(req: NavRouteRequest):
             "source": "error",
         }
 
+    # 起点获取：前端传入 → LocationStore → 默认上海市中心（与 tools.py 一致）
+    # 注意：浏览器 GPS 和 LocationStore 返回 WGS-84；上海回退坐标是 GCJ-02，
+    # 需转成 WGS-84 再传给 plan()，否则 plan() 内部会二次偏转换导致起点偏移。
     lat, lon = req.lat, req.lon
+    gps_source = "request"
     if lat is None or lon is None:
         lat, lon = get_location_store().get_coords()
+        gps_source = "location_store"
+    if lat is None or lon is None:
+        # 桌面浏览器无 GPS 硬件，回退到上海市中心
+        # 31.2304, 121.4737 是 GCJ-02 坐标，转成 WGS-84 后传给 plan()
+        from modules.ai.navigation_service import _gcj02_to_wgs84
+        lat, lon = _gcj02_to_wgs84(31.2304, 121.4737)
+        gps_source = "fallback_shanghai"
     svc = get_navigation_service()
 
     def _run():
         return svc.plan(lat, lon, destination)
 
     try:
-        result = _run_with_timeout(_run, timeout=8.0)
+        result = _run_with_timeout(_run, timeout=12.0)
     except Exception:
         result = {
             "success": False, "destination": destination,
@@ -1108,6 +1115,12 @@ def nav_route(req: NavRouteRequest):
             "distance_km": 0, "duration_min": 0, "steps": [], "geometry": [],
             "source": "error",
         }
+
+    # 回填起点信息（与 tools.py start_navigation 一致）
+    result["origin_source"] = gps_source
+    if gps_source == "fallback_shanghai":
+        result.setdefault("origin", "上海市中心（未获取到真实定位）")
+    result.setdefault("origin_coords", [lat, lon])
 
     # 推送结构化导航数据到前端
     try:
@@ -1369,288 +1382,6 @@ def ac_command(req: ACCommandRequest):
     return {"status": "ok", "data": _ac_state}
 
 
-# ── 音乐播放状态管理 ──
-
-import httpx
-
-_MUSIC_API_BASE = "http://localhost:3000"
-
-_music_state = {
-    "playing": False,
-    "current_song": {"id": 0, "name": "", "artist": "", "album": "", "url": "", "cover": "", "duration": 0},
-    "playlist": [],
-    "playlist_index": -1,
-    "volume": 80,
-    "message": "",
-}
-
-
-@app.get("/api/music/state")
-def get_music_state():
-    """返回当前音乐播放状态"""
-    return {"status": "ok", "data": _music_state}
-
-
-class MusicSearchRequest(BaseModel):
-    keyword: str = ""
-
-
-@app.post("/api/music/search")
-async def music_search(req: MusicSearchRequest):
-    """搜索歌曲：优先本地文件，失败时降级网易云API"""
-    # 1. 先扫本地
-    local = _scan_local_music(req.keyword)
-    if local:
-        return {"status": "ok", "songs": local}
-    # 2. 本地无结果，尝试网易云API
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(
-                f"{_MUSIC_API_BASE}/cloudsearch",
-                params={"keywords": req.keyword},
-            )
-            data = resp.json()
-            # 网易云 API 返回非 200 表示需要登录/Cookie失效，直接降级
-            if data.get("code") != 200:
-                raise ValueError(f"网易云API错误: code={data.get('code')}")
-            songs = []
-            result_songs = data.get("result", {}).get("songs", [])
-            for s in result_songs[:10]:
-                artists_list = s.get("ar") or s.get("artists", [])
-                artists = ", ".join(a.get("name", "") for a in artists_list)
-                album = s.get("al") or s.get("album") or {}
-                songs.append({
-                    "id": s.get("id", 0),
-                    "name": s.get("name", ""),
-                    "artist": artists,
-                    "album": album.get("name", ""),
-                    "duration": s.get("duration", 0),
-                    "cover": (album.get("picUrl") or "") + "?param=300y300",
-                })
-            return {"status": "ok", "songs": songs}
-    except Exception:
-        pass
-    # 3. 兜底：本地+在线都不可用时返回演示曲目
-    demo_all = [
-        {"id": 1, "name": "传奇", "artist": "王菲", "album": "传奇", "duration": 262, "cover": "", "source": "demo"},
-        {"id": 2, "name": "红豆", "artist": "王菲", "album": "唱游", "duration": 253, "cover": "", "source": "demo"},
-        {"id": 3, "name": "匆匆那年", "artist": "王菲", "album": "匆匆那年", "duration": 241, "cover": "", "source": "demo"},
-        {"id": 4, "name": "因为爱情", "artist": "王菲 & 陈奕迅", "album": "将爱", "duration": 228, "cover": "", "source": "demo"},
-        {"id": 5, "name": "如愿", "artist": "王菲", "album": "如愿", "duration": 275, "cover": "", "source": "demo"},
-        {"id": 6, "name": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269, "cover": "", "source": "demo"},
-        {"id": 7, "name": "七里香", "artist": "周杰伦", "album": "七里香", "duration": 299, "cover": "", "source": "demo"},
-        {"id": 8, "name": "夜曲", "artist": "周杰伦", "album": "十一月的萧邦", "duration": 226, "cover": "", "source": "demo"},
-    ]
-    q = req.keyword.strip().lower()
-    if q:
-        demo_all = [d for d in demo_all if q in d["name"].lower() or q in d["artist"].lower()]
-    return {"status": "ok", "songs": demo_all, "hint": "演示曲目（启动 localhost:3000 或放入 MP3 到 data/music/ 获取真实播放）"}
-
-
-class MusicPlayRequest(BaseModel):
-    song_id: int = 0
-
-
-@app.post("/api/music/play")
-async def music_play(req: MusicPlayRequest):
-    """播放指定歌曲：优先本地文件，否则演示曲目，最后尝试网易云API"""
-    global _music_state
-    # 演示曲目映射
-    _demo_map = {
-        1: {"name": "传奇", "artist": "王菲", "album": "传奇", "duration": 262},
-        2: {"name": "红豆", "artist": "王菲", "album": "唱游", "duration": 253},
-        3: {"name": "匆匆那年", "artist": "王菲", "album": "匆匆那年", "duration": 241},
-        4: {"name": "因为爱情", "artist": "王菲 & 陈奕迅", "album": "将爱", "duration": 228},
-        5: {"name": "如愿", "artist": "王菲", "album": "如愿", "duration": 275},
-        6: {"name": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269},
-        7: {"name": "七里香", "artist": "周杰伦", "album": "七里香", "duration": 299},
-        8: {"name": "夜曲", "artist": "周杰伦", "album": "十一月的萧邦", "duration": 226},
-    }
-    try:
-        # 1. 本地文件
-        local_songs = _scan_local_music("")
-        local_match = next((s for s in local_songs if s["id"] == req.song_id), None)
-        if local_match and local_match.get("url"):
-            _music_state["current_song"] = {
-                "id": req.song_id, "name": local_match["name"],
-                "artist": local_match["artist"], "album": "",
-                "url": local_match["url"], "cover": "", "duration": 0,
-            }
-            _music_state["playing"] = True
-            return {"status": "ok", "data": _music_state}
-
-        # 2. 演示曲目（无真实音频，仅展示"播放中"状态）
-        if req.song_id in _demo_map:
-            song = _demo_map[req.song_id]
-            _music_state["current_song"] = {
-                "id": req.song_id, "name": song["name"],
-                "artist": song["artist"], "album": song["album"],
-                "url": "", "cover": "", "duration": song["duration"],
-            }
-            _music_state["playing"] = False
-            _music_state["message"] = "No playable audio source. Start localhost:3000 music API or add MP3/WAV files to data/music/."
-            return {"status": "needs_audio", "data": _music_state, "message": _music_state["message"]}
-
-        # 否则尝试网易云API
-        async with httpx.AsyncClient(timeout=10) as client:
-            # 获取播放URL
-            url_resp = await client.get(
-                f"{_MUSIC_API_BASE}/song/url/v1",
-                params={"id": req.song_id, "level": "exhigh"},
-            )
-            url_data = url_resp.json()
-            urls = url_data.get("data", [])
-            play_url = urls[0].get("url", "") if urls else ""
-
-            # 获取歌曲详情（名称、封面等）
-            detail_resp = await client.get(
-                f"{_MUSIC_API_BASE}/song/detail",
-                params={"ids": str(req.song_id)},
-            )
-            detail_data = detail_resp.json()
-            songs = detail_data.get("songs", [])
-            song_info = songs[0] if songs else {}
-
-            artists = ", ".join(a.get("name", "") for a in (song_info.get("ar") or song_info.get("artists", [])))
-            album = song_info.get("al") or song_info.get("album") or {}
-            cover_url = (album.get("picUrl") or "") + "?param=300y300"
-            duration = song_info.get("duration", 0)
-
-            # 更新播放列表索引
-            idx = -1
-            for i, item in enumerate(_music_state["playlist"]):
-                if item.get("id") == req.song_id:
-                    idx = i
-                    break
-            if idx == -1:
-                _music_state["playlist"].append({
-                    "id": req.song_id,
-                    "name": song_info.get("name", ""),
-                    "artist": artists,
-                    "album": album.get("name", ""),
-                    "cover": cover_url,
-                    "duration": duration,
-                })
-                _music_state["playlist_index"] = len(_music_state["playlist"]) - 1
-            else:
-                _music_state["playlist_index"] = idx
-
-            _music_state["current_song"] = {
-                "id": req.song_id,
-                "name": song_info.get("name", ""),
-                "artist": artists,
-                "album": album.get("name", ""),
-                "url": play_url,
-                "cover": cover_url,
-                "duration": duration,
-            }
-            if not play_url:
-                _music_state["playing"] = False
-                _music_state["message"] = "Music API did not return a playable URL. The song may require login or be copyright restricted."
-                return {"status": "needs_audio", "data": _music_state, "message": _music_state["message"]}
-            _music_state["playing"] = True
-            _music_state["message"] = ""
-
-            return {"status": "ok", "data": _music_state}
-    except Exception as e:
-        return {"status": "error", "message": str(e)[:200]}
-
-
-@app.post("/api/music/pause")
-def music_pause():
-    """切换播放/暂停状态"""
-    global _music_state
-    if not _music_state.get("playing") and not _music_state.get("current_song", {}).get("url"):
-        _music_state["message"] = "No playable audio source selected."
-        return {"status": "needs_audio", "data": _music_state, "message": _music_state["message"]}
-    _music_state["playing"] = not _music_state["playing"]
-    _music_state["message"] = ""
-    return {"status": "ok", "data": _music_state}
-
-
-@app.post("/api/music/next")
-async def music_next():
-    """播放列表下一首"""
-    global _music_state
-    pl = _music_state["playlist"]
-    if not pl:
-        return {"status": "ok", "data": _music_state}
-    _music_state["playlist_index"] = (_music_state["playlist_index"] + 1) % len(pl)
-    next_song = pl[_music_state["playlist_index"]]
-    # 自动获取播放URL
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            url_resp = await client.get(
-                f"{_MUSIC_API_BASE}/song/url/v1",
-                params={"id": next_song["id"], "level": "exhigh"},
-            )
-            url_data = url_resp.json()
-            urls = url_data.get("data", [])
-            play_url = urls[0].get("url", "") if urls else ""
-            next_song["url"] = play_url
-    except Exception:
-        pass
-
-    _music_state["current_song"] = {
-        "id": next_song.get("id", 0),
-        "name": next_song.get("name", ""),
-        "artist": next_song.get("artist", ""),
-        "album": next_song.get("album", ""),
-        "url": next_song.get("url", ""),
-        "cover": next_song.get("cover", ""),
-        "duration": next_song.get("duration", 0),
-    }
-    _music_state["playing"] = True
-    return {"status": "ok", "data": _music_state}
-
-
-@app.post("/api/music/prev")
-async def music_prev():
-    """播放列表上一首"""
-    global _music_state
-    pl = _music_state["playlist"]
-    if not pl:
-        return {"status": "ok", "data": _music_state}
-    _music_state["playlist_index"] = (_music_state["playlist_index"] - 1) % len(pl)
-    prev_song = pl[_music_state["playlist_index"]]
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            url_resp = await client.get(
-                f"{_MUSIC_API_BASE}/song/url/v1",
-                params={"id": prev_song["id"], "level": "exhigh"},
-            )
-            url_data = url_resp.json()
-            urls = url_data.get("data", [])
-            play_url = urls[0].get("url", "") if urls else ""
-            prev_song["url"] = play_url
-    except Exception:
-        pass
-
-    _music_state["current_song"] = {
-        "id": prev_song.get("id", 0),
-        "name": prev_song.get("name", ""),
-        "artist": prev_song.get("artist", ""),
-        "album": prev_song.get("album", ""),
-        "url": prev_song.get("url", ""),
-        "cover": prev_song.get("cover", ""),
-        "duration": prev_song.get("duration", 0),
-    }
-    _music_state["playing"] = True
-    return {"status": "ok", "data": _music_state}
-
-
-class MusicVolumeRequest(BaseModel):
-    volume: int = 80
-
-
-@app.post("/api/music/volume")
-def music_volume(req: MusicVolumeRequest):
-    """设置音量 (0-100)"""
-    global _music_state
-    _music_state["volume"] = max(0, min(int(req.volume), 100))
-    return {"status": "ok", "data": _music_state}
-
-
 @app.get("/api/prompts")
 def prompts_list(category: str = "", search: str = ""):
     """
@@ -1745,6 +1476,18 @@ def voice_process(req: VoiceRequest):
         return {
             "status": "error", "reply": "请告诉我您要做什么",
             "action_code": "", "tts_text": ""
+        }
+
+    if os.getenv("VOICE_PROCESS_MODE", "tool_calling").strip().lower() != "legacy":
+        driver_state = get_camera_state() or {}
+        result = _run_tool_calling_agent_sync(text, driver_state)
+        reply = result.get("reply", "")
+        return {
+            "status": "ok",
+            "reply": reply,
+            "action_code": "",
+            "tts_text": reply,
+            "route": "tool_calling",
         }
 
     reply = ""

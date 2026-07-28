@@ -21,6 +21,7 @@ def iter_structured_result_events(response):
                 "steps": nav.get("steps", []),
                 "coordinate_system": nav.get("coordinate_system", ""),
                 "source": nav.get("source", ""),
+                "origin_source": nav.get("origin_source", ""),
                 "map_url": nav.get("map_url", ""),
                 "amap_nav_url": nav.get("amap_nav_url", ""),
             }
@@ -52,6 +53,16 @@ def iter_structured_result_events(response):
                 yield "attractions", {
                     "city": rec_data.get("city", ""),
                     "attractions": attrs,
+                }
+        elif result.intent_category == "music_control":
+            # 音乐控制结果 → 通知前端刷新音乐状态
+            actions = result.actions
+            if actions:
+                yield "music_state", {
+                    "command": actions[0].get("command", ""),
+                    "song": actions[0].get("song", ""),
+                    "artist": actions[0].get("artist", ""),
+                    "reply": result.reply_text,
                 }
 
 
