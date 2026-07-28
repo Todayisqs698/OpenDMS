@@ -281,11 +281,17 @@ async def lifespan(app: FastAPI):
     global _loop
     _loop = asyncio.get_event_loop()
     ws_manager.set_event_loop(_loop)  # 注入事件循环供 camera 线程 WS 广播
-    from app.camera import start, stop
     import asyncio as _aio
 
-    start(ws_manager)
-    logger.info("摄像头引擎已启动")
+    try:
+        from app.camera import start, stop
+        start(ws_manager)
+        logger.info("摄像头引擎已启动")
+    except ImportError:
+        logger.info("摄像头模块不可用（无 OpenCV/MediaPipe），跳过")
+        start, stop = None, None
+    except Exception as e:
+        logger.warning(f"摄像头引擎启动失败: {e}")
 
     # ── 初始化数据库表（确保 alerts 等表存在）──
     try:
@@ -332,8 +338,9 @@ async def lifespan(app: FastAPI):
         logger.warning(f"结束驾驶会话失败: {e}")
 
     env_task.cancel()
-    stop()
-    logger.info("摄像头引擎已停止")
+    if stop:
+        stop()
+        logger.info("摄像头引擎已停止")
 
 
 app = FastAPI(title="EdgeGuard API", version="1.0.0", lifespan=lifespan)
