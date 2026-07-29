@@ -206,10 +206,11 @@ EdgeGuard/
 │   ├── test_schemas.py              # Schema 校验测试
 │   └── conftest.py                  # Pytest fixtures
 │
-├── EdgeGuard设计文档/               # LaTeX 毕业设计论文
-│   ├── main.tex                     # 论文主文件
-│   ├── reference.bib                # 参考文献
-│   └── style/                       # 样式文件
+├── reference/                      # 参考资料（非运行时文件）
+│   ├── EdgeGuard设计文档/           # LaTeX 毕业设计论文
+│   ├── *.pptx                       # 汇报答辩 PPT
+│   ├── PLAN.md                      # 开发计划
+│   └── *.py                         # 一次性工具脚本
 │
 ├── Dockerfile.backend               # 后端 Docker 镜像
 ├── Dockerfile.backend-server        # 服务器版 Docker 镜像
@@ -390,7 +391,7 @@ pytest --cov=modules --cov-report=html
 
 ## 设计文档
 
-完整的系统设计与技术方案详见 `EdgeGuard设计文档/`（LaTeX 毕业设计论文），涵盖：
+完整的系统设计与技术方案详见 `reference/EdgeGuard设计文档/`（LaTeX 毕业设计论文），涵盖：
 - 系统需求分析与架构设计
 - 多模态感知融合方案
 - LangGraph 多 Agent 协作机制
