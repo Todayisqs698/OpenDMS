@@ -1,0 +1,30 @@
+# docker-compose.dev.yml — 开发模式（热重载 + 源码挂载）
+# 使用: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+version: '3.8'
+
+services:
+  # 后端：热重载模式
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000 --reload-dir /app/modules
+    volumes:
+      - ./backend:/app/backend
+      - ./modules:/app/modules
+      - ./data:/app/data
+      - ./.env:/app/.env:ro
+    environment:
+      - CAMERA_ENABLED=0
+
+  # 前端：Vite dev server（热更新）
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "8005:5173"
+    volumes:
+      - ./frontend:/app
+    depends_on:
+      - backend

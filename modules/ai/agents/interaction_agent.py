@@ -15,16 +15,23 @@ modules.ai.interaction_agent 模块。
 
 import logging
 
+from modules.ai.base_agent import BaseScaffoldAgent
+from modules.ai.schemas import InteractionAgentInput, InteractionOutput, AgentStatus
+
 logger = logging.getLogger(__name__)
 
 
-class InteractionAgent:
+class InteractionAgent(BaseScaffoldAgent[InteractionAgentInput, InteractionOutput]):
     """
     交互 Agent — 兼容层
 
+    改造后继承 BaseScaffoldAgent，对外统一入口 run(context)。
     委托到 modules.ai.interaction_agent.InteractionAgent，
     保持与 langgraph_orchestrator 完全兼容。
     """
+
+    input_model = InteractionAgentInput
+    output_model = InteractionOutput
 
     # 手势 → action_code 映射表（保持向后兼容）
     GESTURE_MAP = {
@@ -39,6 +46,7 @@ class InteractionAgent:
         self._agent = None
         self._init_agent()
         self.knowledge_base = None
+        super().__init__()
 
     def _init_agent(self):
         """延迟加载核心交互智能体"""
@@ -141,3 +149,28 @@ class InteractionAgent:
             if keyword in text:
                 return action
         return "unknown"
+
+    # ── BaseScaffoldAgent 实现 ──
+
+    def _run_impl(self, context: InteractionAgentInput) -> InteractionOutput:
+        """统一入口：InteractionAgentInput → 现有 analyze() → InteractionOutput"""
+        data = {
+            "gesture": context.gesture,
+            "speech": context.speech or {"text": context.user_input},
+        }
+        result = self.analyze(data)
+
+        # 判断 match_type
+        source = result.get("source", "none")
+        match_type = "keyword" if source == "speech" else ("gesture" if source == "gesture" else "llm")
+
+        return InteractionOutput(
+            status=AgentStatus.SUCCEEDED,
+            action_code=result.get("action_code", "unknown"),
+            confirmation_text=result.get("recommendation_text", ""),
+            params=result.get("params", {}),
+            match_type=match_type,
+            source=source,
+            recommendation_text=result.get("recommendation_text", ""),
+            confidence=result.get("confidence", 0.0),
+        )

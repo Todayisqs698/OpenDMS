@@ -22,15 +22,26 @@
 import logging
 from typing import List, Dict, Any
 
+from modules.ai.base_agent import BaseScaffoldAgent
+from modules.ai.schemas import DiagnoseAgentInput, DiagnosisOutput, KnowledgeSource, AgentStatus
+
 logger = logging.getLogger(__name__)
 
 
-class DiagnoseAgent:
-    """故障诊断智能体"""
+class DiagnoseAgent(BaseScaffoldAgent[DiagnoseAgentInput, DiagnosisOutput]):
+    """故障诊断智能体
+
+    改造后继承 BaseScaffoldAgent，对外统一入口 run(context)。
+    原有 analyze() 保持不变，供旧调用方兼容。
+    """
+
+    input_model = DiagnoseAgentInput
+    output_model = DiagnosisOutput
 
     def __init__(self):
         self._kb = None
         self._llm_client = None
+        super().__init__()
 
     @property
     def knowledge_base(self):
@@ -93,7 +104,7 @@ class DiagnoseAgent:
 
             try:
                 response = self.llm.client.chat.completions.create(
-                    model="deepseek-v4-flash",
+                    model=self.llm.chat_model,
                     messages=[
                         {"role": "system", "content": "你是专业的汽车维修技师，回答简洁实用。"},
                         {"role": "user", "content": diagnosis_prompt},
@@ -170,3 +181,41 @@ class DiagnoseAgent:
         if any(kw in query_lower for kw in medium_keywords):
             return "medium"
         return "low"
+
+    # ── BaseScaffoldAgent 实现 ──
+
+    def _run_impl(self, context: DiagnoseAgentInput) -> DiagnosisOutput:
+        """统一入口：DiagnoseAgentInput → 现有 analyze() → DiagnosisOutput"""
+        query = context.symptom or context.query
+        result = self.analyze(query, top_k=context.top_k)
+
+        # severity → urgency 映射
+        severity = result.get("severity", "unknown")
+        urgency_map = {"high": "immediate", "medium": "soon", "low": "routine", "unknown": "routine"}
+        urgency = urgency_map.get(severity, "routine")
+
+        # 构建 knowledge_sources
+        knowledge_sources = [
+            KnowledgeSource(
+                ref_id=f"[KB:manual §{i+1}]",
+                snippet=d.get("content", "")[:100],
+                score=d.get("score", 0.0),
+            )
+            for i, d in enumerate(result.get("related_docs", []))
+        ]
+
+        suggestions = result.get("suggestions", [])
+
+        return DiagnosisOutput(
+            status=AgentStatus.SUCCEEDED if result.get("success") else AgentStatus.FAILED,
+            symptom=query,
+            diagnosis=result.get("diagnosis", ""),
+            possible_causes=suggestions[:2],
+            knowledge_sources=knowledge_sources,
+            suggestion=suggestions[0] if suggestions else "",
+            urgency=urgency,
+            related_docs=result.get("related_docs", []),
+            suggestions=suggestions,
+            severity=severity,
+            evidence_ids=[ks.ref_id for ks in knowledge_sources],
+        )

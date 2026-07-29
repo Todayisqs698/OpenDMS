@@ -13,6 +13,7 @@ TOOL_RESTRICTIONS = {
     "attn_declining": None,  # 所有工具可用，但注入提示
     "distracted": ["speak", "alert_driver", "ask_clarification", "control_ac"],  # 娱乐受限
     "dangerous": ["speak", "alert_driver"],  # 仅安全告警和语音反馈
+    "readonly": ["speak", "alert_driver", "search_knowledge", "ask_clarification"],  # 只读模式：查询+告警
 }
 
 # 各级别的系统提示注入
@@ -22,6 +23,7 @@ SAFETY_SYSTEM_PROMPTS = {
     "attn_declining": "【注意】驾驶员注意力开始下降，优先执行安全相关任务，避免长时间交互。",
     "distracted": "【警告】驾驶员处于分心状态，音乐和导航功能已禁用。优先提醒驾驶员注意安全。",
     "dangerous": "【紧急】驾驶员处于危险状态！只能执行安全告警，禁止其他操作。",
+    "readonly": "【安全模式】当前为只读模式，仅允许查询和告警操作，禁止执行控制类工具（空调、音乐、导航、行程规划）。",
 }
 
 

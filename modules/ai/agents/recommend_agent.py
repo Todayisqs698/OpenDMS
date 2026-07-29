@@ -20,17 +20,28 @@
 import logging
 from typing import List, Dict, Any
 
+from modules.ai.base_agent import BaseScaffoldAgent
+from modules.ai.schemas import RecommendAgentInput, TripPlanOutput, AgentStatus
+
 logger = logging.getLogger(__name__)
 
 
-class RecommendAgent:
-    """出行建议智能体"""
+class RecommendAgent(BaseScaffoldAgent[RecommendAgentInput, TripPlanOutput]):
+    """出行建议智能体
+
+    改造后继承 BaseScaffoldAgent，对外统一入口 run(context)。
+    原有 analyze() 保持不变，供旧调用方兼容。
+    """
+
+    input_model = RecommendAgentInput
+    output_model = TripPlanOutput
 
     def __init__(self):
         self._env_agent = None
         self._llm_client = None
         self._last_poi_results = []
         self._last_poi_city = ""
+        super().__init__()
 
     @property
     def env_agent(self):
@@ -224,7 +235,7 @@ class RecommendAgent:
 请给出一句简短的出行建议（30字内）。"""
 
             response = self.llm.client.chat.completions.create(
-                model="deepseek-v4-flash",
+                model=self.llm.chat_model,
                 messages=[
                     {"role": "system", "content": "你是贴心的出行助手，回答简洁实用。"},
                     {"role": "user", "content": prompt},
@@ -381,7 +392,7 @@ class RecommendAgent:
             if not deepseek_client.is_available:
                 return {}
             resp = deepseek_client.client.chat.completions.create(
-                model="deepseek-v4-flash",
+                model=deepseek_client.chat_model,
                 messages=[{
                     "role": "system",
                     "content": (
@@ -429,7 +440,7 @@ class RecommendAgent:
 
         try:
             resp = self.llm.client.chat.completions.create(
-                model="deepseek-v4-flash",
+                model=self.llm.chat_model,
                 messages=[{"role": "system", "content": "只输出JSON。"}, {"role": "user", "content": prompt}],
                 max_tokens=4096, temperature=0.7,
             )
@@ -512,3 +523,76 @@ class RecommendAgent:
             "suggestions": [name],
             "needs_clarification": False,
         }
+
+    # ── BaseScaffoldAgent 实现 ──
+
+    def _run_impl(self, context: RecommendAgentInput) -> TripPlanOutput:
+        """统一入口：RecommendAgentInput → 现有 analyze() → TripPlanOutput"""
+        data = {
+            "query": context.query,
+            "category": context.category,
+            "city": context.city,
+            "destination": context.destination,
+            "days": context.days,
+            "preference": context.preference,
+        }
+        result = self.analyze(data)
+
+        # 行程模板匹配：从 trip_templates.json 查找匹配的模板
+        template_id = None
+        evidence_ids: list[str] = []
+        if context.category == "trip_plan" and context.city:
+            tmpl = self._match_trip_template(context.city, context.days)
+            if tmpl:
+                template_id = tmpl["id"]
+                evidence_ids.append(f"[TMPL:{tmpl['id']}]")
+
+        # 导航类结果添加 API 证据引用
+        if result.get("type") == "navigation" and result.get("nav_data"):
+            evidence_ids.append("[API:amap_nav]")
+        elif result.get("type") == "weather" and result.get("weather"):
+            evidence_ids.append("[API:amap_weather]")
+        elif result.get("type") == "attractions" and result.get("attractions"):
+            evidence_ids.append("[API:amap_poi]")
+
+        return TripPlanOutput(
+            status=AgentStatus.SUCCEEDED if result.get("success") else AgentStatus.FAILED,
+            city=result.get("city", context.city),
+            days=context.days,
+            reply=result.get("reply", ""),
+            type=result.get("type", "general"),
+            trip_plan=result.get("trip_plan"),
+            weather=result.get("weather", {}),
+            nav_data=result.get("nav_data"),
+            attractions=result.get("attractions", []),
+            suggestions=result.get("suggestions", []),
+            needs_clarification=result.get("needs_clarification", False),
+            clarification_question=result.get("clarification_question", ""),
+            template_id=template_id,
+            evidence_ids=evidence_ids,
+        )
+
+    @staticmethod
+    def _match_trip_template(city: str, days: int) -> dict | None:
+        """从 trip_templates.json 查找匹配的行程模板"""
+        import json
+        import os
+        template_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(
+                os.path.dirname(os.path.abspath(__file__))))),
+            "data", "knowledge", "trip_templates.json"
+        )
+        try:
+            with open(template_path, "r", encoding="utf-8") as f:
+                templates = json.load(f)
+        except Exception:
+            return None
+
+        for tmpl in templates:
+            if tmpl.get("city") == city and tmpl.get("days") == days:
+                return tmpl
+        # 退化：城市匹配但天数不同
+        for tmpl in templates:
+            if tmpl.get("city") == city:
+                return tmpl
+        return None

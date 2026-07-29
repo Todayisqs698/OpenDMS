@@ -288,11 +288,16 @@ def perceive_node(state: dict) -> dict:
     """
     感知节点：优先从 DriverStateMachine 读取 7 维状态向量 + 趋势预测，
     降级到 SafetyAgent 单点判断（无传感器数据时）。
+    支持通过 driver_state["_force_safety"] 强制指定安全等级（用于只读模式）。
     """
     driver_state = state.get("driver_state") or {}
 
-    # 优先使用 DriverStateMachine（有历史数据时）
-    if _driver_state_machine.history:
+    # 检查是否强制指定安全等级（如 readonly 模式）
+    force_safety = driver_state.get("_force_safety")
+    if force_safety:
+        risk_level = force_safety
+        logger.info("Perceive (forced safety): risk_level=%s", risk_level)
+    elif _driver_state_machine.history:
         risk_level = _driver_state_machine.get_state()
         trend = _driver_state_machine.get_trend()
         risk_score = _driver_state_machine.get_risk_score()

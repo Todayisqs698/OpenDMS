@@ -101,14 +101,50 @@ async def music_search(req: MusicSearchRequest):
         pass
     # 3. 兜底：本地+在线都不可用时返回演示曲目
     demo_all = [
+        # 王菲
         {"id": 1, "name": "传奇", "artist": "王菲", "album": "传奇", "duration": 262, "cover": "", "source": "demo"},
         {"id": 2, "name": "红豆", "artist": "王菲", "album": "唱游", "duration": 253, "cover": "", "source": "demo"},
         {"id": 3, "name": "匆匆那年", "artist": "王菲", "album": "匆匆那年", "duration": 241, "cover": "", "source": "demo"},
         {"id": 4, "name": "因为爱情", "artist": "王菲 & 陈奕迅", "album": "将爱", "duration": 228, "cover": "", "source": "demo"},
         {"id": 5, "name": "如愿", "artist": "王菲", "album": "如愿", "duration": 275, "cover": "", "source": "demo"},
+        # 周杰伦
         {"id": 6, "name": "晴天", "artist": "周杰伦", "album": "叶惠美", "duration": 269, "cover": "", "source": "demo"},
         {"id": 7, "name": "七里香", "artist": "周杰伦", "album": "七里香", "duration": 299, "cover": "", "source": "demo"},
         {"id": 8, "name": "夜曲", "artist": "周杰伦", "album": "十一月的萧邦", "duration": 226, "cover": "", "source": "demo"},
+        {"id": 9, "name": "稻香", "artist": "周杰伦", "album": "魔杰座", "duration": 223, "cover": "", "source": "demo"},
+        # 林忆莲
+        {"id": 10, "name": "至少还有你", "artist": "林忆莲", "album": "林忆莲's", "duration": 276, "cover": "", "source": "demo"},
+        {"id": 11, "name": "爱上一个不回家的人", "artist": "林忆莲", "album": "都市触觉", "duration": 297, "cover": "", "source": "demo"},
+        # 张学友
+        {"id": 12, "name": "吻别", "artist": "张学友", "album": "吻别", "duration": 316, "cover": "", "source": "demo"},
+        {"id": 13, "name": "她来听我的演唱会", "artist": "张学友", "album": "走过1999", "duration": 286, "cover": "", "source": "demo"},
+        # 刘德华
+        {"id": 14, "name": "忘情水", "artist": "刘德华", "album": "忘情水", "duration": 262, "cover": "", "source": "demo"},
+        {"id": 15, "name": "今天", "artist": "刘德华", "album": "真永远", "duration": 276, "cover": "", "source": "demo"},
+        # 邓紫棋
+        {"id": 16, "name": "光年之外", "artist": "邓紫棋", "album": "光年之外", "duration": 235, "cover": "", "source": "demo"},
+        {"id": 17, "name": "泡沫", "artist": "邓紫棋", "album": "Xposed", "duration": 262, "cover": "", "source": "demo"},
+        # 陈奕迅
+        {"id": 18, "name": "十年", "artist": "陈奕迅", "album": "黑白灰", "duration": 219, "cover": "", "source": "demo"},
+        {"id": 19, "name": "浮夸", "artist": "陈奕迅", "album": "U87", "duration": 284, "cover": "", "source": "demo"},
+        # 薛之谦
+        {"id": 20, "name": "演员", "artist": "薛之谦", "album": "绅士", "duration": 261, "cover": "", "source": "demo"},
+        {"id": 21, "name": "丑八怪", "artist": "薛之谦", "album": "初学者", "duration": 239, "cover": "", "source": "demo"},
+        # 林俊杰
+        {"id": 22, "name": "修炼爱情", "artist": "林俊杰", "album": "因你而在", "duration": 283, "cover": "", "source": "demo"},
+        {"id": 23, "name": "江南", "artist": "林俊杰", "album": "第二天堂", "duration": 267, "cover": "", "source": "demo"},
+        # 蔡依林
+        {"id": 24, "name": "倒带", "artist": "蔡依林", "album": "城堡", "duration": 249, "cover": "", "source": "demo"},
+        # 五月天
+        {"id": 25, "name": "倔强", "artist": "五月天", "album": "神的孩子都在跳舞", "duration": 248, "cover": "", "source": "demo"},
+        {"id": 26, "name": "突然好想你", "artist": "五月天", "album": "后青春期的诗", "duration": 275, "cover": "", "source": "demo"},
+        # 孙燕姿
+        {"id": 27, "name": "遇见", "artist": "孙燕姿", "album": "The Moment", "duration": 243, "cover": "", "source": "demo"},
+        {"id": 28, "name": "我怀念的", "artist": "孙燕姿", "album": "逆光", "duration": 269, "cover": "", "source": "demo"},
+        # 梁静茹
+        {"id": 29, "name": "勇气", "artist": "梁静茹", "album": "勇气", "duration": 275, "cover": "", "source": "demo"},
+        # 莫文蔚
+        {"id": 30, "name": "忽然之间", "artist": "莫文蔚", "album": "就是莫文蔚", "duration": 253, "cover": "", "source": "demo"},
     ]
     q = req.keyword.strip().lower()
     if q:

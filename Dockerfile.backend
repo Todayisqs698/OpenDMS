@@ -1,0 +1,24 @@
+# Dockerfile.backend — 本地开发全功能镜像（含视觉/语音依赖）
+FROM python:3.11-slim
+
+# 系统依赖：OpenCV、MediaPipe、ffmpeg
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender-dev \
+    libgomp1 ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 先装依赖（利用 Docker 层缓存）
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 复制项目代码
+COPY . .
+
+# 数据持久化目录
+RUN mkdir -p /app/data
+
+EXPOSE 8000
+
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

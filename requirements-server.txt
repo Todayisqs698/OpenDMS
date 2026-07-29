@@ -1,0 +1,28 @@
+# EdgeGuard — 云端服务器依赖（精简版）
+# 云服务器无摄像头/麦克风硬件，排除重量级 ML 包
+# 安装: pip install -r requirements-server.txt
+
+# LLM & AI
+openai>=1.30.0
+langchain>=0.3.0
+langchain-openai>=0.2.0
+langgraph>=0.2.0
+
+# 后端
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+websockets>=12.0
+httpx>=0.28.0
+pydantic>=2.0.0
+
+# 工具
+python-dotenv>=1.0.0
+requests>=2.31.0
+edge-tts>=6.1.0
+PyExecJS>=1.5.1
+
+# 数据库
+aiosqlite>=0.20.0
+
+# 视觉（服务器端轻量需要，用于 import 兼容）
+numpy>=1.24.0

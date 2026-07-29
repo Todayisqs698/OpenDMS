@@ -1,0 +1,43 @@
+# 版本控制
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+env
+*.egg-info
+.pytest_cache
+
+# Node
+node_modules
+frontend/node_modules
+tools/netease-cloud-music-api/node_modules
+
+# 构建产物
+frontend/dist
+*.log
+
+# IDE
+.vscode
+.idea
+.claude
+
+# 文档（非运行时需要）
+EdgeGuard设计文档
+picture
+mobile
+
+# 临时文件
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
+
+# Docker 自身
+Dockerfile*
+docker-compose*.yml
+.dockerignore

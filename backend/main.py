@@ -132,13 +132,51 @@ def _emit_orchestrator_steps(response, driver_state: dict, sync_push):
         })
 
 
-def _run_unified_agent_sync(text: str, driver_state: dict, sync_push=None, callbacks: dict = None) -> dict:
-    """Run the canonical chat path and return the legacy chat-shaped result."""
-    mode = os.getenv("AGENT_CHAT_MODE", "tool_calling").strip().lower()
-    if mode != "orchestrator":
-        return _run_tool_calling_agent_sync(text, driver_state, sync_push=sync_push)
+def _run_unified_agent_sync(text: str, driver_state: dict, sync_push=None, callbacks: dict = None,
+                            route: str = "auto") -> dict:
+    """Run the canonical chat path and return the legacy chat-shaped result.
 
-    return _run_orchestrator_agent_sync(text, driver_state, sync_push=sync_push, callbacks=callbacks)
+    route 参数控制执行路径：
+      auto     → 自动分类（由 route_classifier 决定）
+      quick    → 跳过 LLM，本地关键词匹配 + ControlExecutor 直达工具
+      react    → ReAct 推理（LLM 工具调用）
+      multi    → 多Agent 编排（Orchestrator）
+      readonly → 只读模式（强制安全门控，禁用写操作工具）
+    """
+    # ── 安全前置门：危险驾驶状态强制走 multi（SafetyAgent VETO）──
+    # 即使前端显式发送 route='quick'，危险状态下也必须经过 SafetyAgent 审查
+    from modules.ai.route_classifier import is_dangerous_driver_state
+    if route != "readonly" and is_dangerous_driver_state(driver_state):
+        logger.warning(
+            "Safety override: dangerous driver state detected "
+            "(severity=%s, fatigue_score=%s), forcing 'multi' route (was '%s')",
+            (driver_state or {}).get("severity"),
+            (driver_state or {}).get("fatigue_score"),
+            route,
+        )
+        push = sync_push or (lambda *a: None)
+        push("step", {
+            "id": "safety_override",
+            "label": "安全前置门：检测到危险驾驶状态，强制走安全编排",
+            "status": "done",
+            "stage": "safety",
+        })
+        route = "multi"
+
+    # auto 路由：先分类，再分发
+    if route == "auto":
+        from modules.ai.route_classifier import classify_route
+        route = classify_route(text, driver_state)
+        logger.info("Auto route classified as: %s (text=%s)", route, text[:50])
+
+    if route == "quick":
+        return _run_quick_route_sync(text, driver_state, sync_push)
+    elif route == "multi":
+        return _run_orchestrator_agent_sync(text, driver_state, sync_push=sync_push, callbacks=callbacks)
+    elif route == "readonly":
+        return _run_readonly_route_sync(text, driver_state, sync_push)
+    else:  # "react" or fallback
+        return _run_tool_calling_agent_sync(text, driver_state, sync_push)
 
 
 def _run_tool_calling_agent_sync(text: str, driver_state: dict, sync_push=None) -> dict:
@@ -208,31 +246,294 @@ def _run_tool_calling_agent_sync(text: str, driver_state: dict, sync_push=None) 
     }
 
 
+def _emit_multi_agent_steps(response, driver_state: dict, sync_push):
+    """Emit step events for the LangGraph multi-agent topology."""
+    safety_level = _resolve_agent_safety_level(response, driver_state)
+    sync_push("step", {
+        "id": "perceive",
+        "label": f"感知驾驶状态：{safety_level}",
+        "status": "done",
+        "stage": "perceive",
+    })
+
+    if response.route == "safety_shortcut":
+        sync_push("step", {
+            "id": "safety_veto",
+            "label": "SafetyAgent VETO：危险状态，已短路告警",
+            "status": "done",
+            "stage": "safety",
+        })
+        return
+
+    sync_push("step", {
+        "id": "safety_check",
+        "label": "SafetyAgent 安全检查通过",
+        "status": "done",
+        "stage": "safety",
+    })
+
+    intents = response.intent_plan.get("intents", []) if response.intent_plan else []
+    if intents:
+        labels = [f"{i.get('category')}→{i.get('agent')}" for i in intents]
+        sync_push("step", {
+            "id": "intention_route",
+            "label": "IntentionAgent 路由：" + "、".join(labels),
+            "status": "done",
+            "stage": "intent",
+        })
+
+    agents_used = getattr(response, "agents_used", [])
+    for result in response.results:
+        status = "done" if result.success else "error"
+        sync_push("step", {
+            "id": f"agent_{result.agent_name}",
+            "label": f"{result.agent_name} 执行 {result.intent_category}",
+            "status": status,
+            "stage": "dispatch",
+        })
+
+    audit = getattr(response, "audit_result", {}) or {}
+    audit_issues = audit.get("issues", []) if isinstance(audit, dict) else []
+    if audit_issues:
+        sync_push("step", {
+            "id": "evidence_audit",
+            "label": f"EvidenceAudit 发现 {len(audit_issues)} 个问题",
+            "status": "done",
+            "stage": "audit",
+        })
+    elif agents_used and "evidence_audit" in agents_used:
+        sync_push("step", {
+            "id": "evidence_audit",
+            "label": "EvidenceAudit 审计通过",
+            "status": "done",
+            "stage": "audit",
+        })
+
+
 def _run_orchestrator_agent_sync(text: str, driver_state: dict, sync_push=None, callbacks: dict = None) -> dict:
-    """Run the legacy AgentOrchestrator path and return the legacy chat-shaped result."""
-    orch = _get_orchestrator()
+    """Run the LangGraph multi-agent topology and return the legacy chat-shaped result."""
+    from modules.ai.multi_agent_graph import get_multi_agent_orchestrator
 
     def noop_push(event_type: str, data: dict):
         return None
 
     push = sync_push or noop_push
+
+    push("step", {
+        "id": "agent_mode",
+        "label": "决策模式：LangGraph 六Agent编排",
+        "status": "done",
+        "stage": "agent",
+    })
+
+    orch = get_multi_agent_orchestrator()
     response = orch.process(text=text, driver_state=driver_state, callbacks=callbacks)
     safety_level = _resolve_agent_safety_level(response, driver_state)
-    _emit_orchestrator_steps(response, driver_state, push)
+    _emit_multi_agent_steps(response, driver_state, push)
 
     agent_result = {
         "reply": response.overall_reply,
         "steps": len(response.results),
-        "status": "emergency" if response.route == "safety_shortcut" else "success",
+        "status": "emergency" if response.route == "safety_shortcut"
+                   else ("audit_blocked" if getattr(response, "audit_blocked", False) else "success"),
         "safety_level": safety_level,
         "route": response.route,
         "intent_plan": response.intent_plan,
         "orchestrator_response": response,
+        "agents_used": getattr(response, "agents_used", []),
+        "audit_result": getattr(response, "audit_result", {}),
+        "audit_blocked": getattr(response, "audit_blocked", False),
+        "evidence": getattr(response, "evidence", []),
     }
 
     push_structured_results(response, push)
     push("final", {"text": response.overall_reply})
     return agent_result
+
+
+# action_code → ControlExecutor 的 category + params 映射
+_ACTION_CODE_MAP = {
+    "TurnOnAC": ("ac_control", {"action": "TurnOnAC"}),
+    "TurnOffAC": ("ac_control", {"action": "TurnOffAC"}),
+    "PlayMusic": ("music_control", {"action": "play"}),
+    "StopMusic": ("music_control", {"action": "pause"}),
+    "volume_up": ("music_control", {"volume_action": "up"}),
+    "volume_down": ("music_control", {"volume_action": "down"}),
+}
+
+
+def _run_quick_route_sync(text: str, driver_state: dict, sync_push=None) -> dict:
+    """快速指令路由：跳过 LLM，本地关键词匹配后直接调 ControlExecutor。<100ms。"""
+    from modules.ai.local_decision_engine import _handle_speech
+
+    def noop_push(event_type: str, data: dict):
+        return None
+
+    push = sync_push or noop_push
+    push("step", {
+        "id": "agent_mode",
+        "label": "决策模式：快速指令（本地匹配）",
+        "status": "done",
+        "stage": "agent",
+    })
+
+    # 本地关键词匹配
+    result = _handle_speech({"text": text})
+    action_code = result.get("action_code", "unknown")
+    decision_mode = result.get("decision_mode", "")
+
+    push("step", {
+        "id": "local_match",
+        "label": f"本地匹配：{action_code}（置信度 {result.get('confidence', 0):.0%}）",
+        "status": "done",
+        "stage": "perceive",
+    })
+
+    # 未命中可执行指令 → 降级到 ReAct
+    if action_code == "unknown" or action_code == "semantic_query" or decision_mode == "CLARIFY":
+        push("step", {
+            "id": "fallback_react",
+            "label": "本地未命中，降级到 ReAct 推理",
+            "status": "done",
+            "stage": "agent",
+        })
+        return _run_tool_calling_agent_sync(text, driver_state, sync_push)
+
+    # 查映射表，找到可执行的控制类别
+    mapped = _ACTION_CODE_MAP.get(action_code)
+    if not mapped:
+        # 不在映射表中的指令（如车窗、灯光）→ 降级到 ReAct
+        push("step", {
+            "id": "fallback_react",
+            "label": f"指令 {action_code} 无快速执行器，降级到 ReAct",
+            "status": "done",
+            "stage": "agent",
+        })
+        return _run_tool_calling_agent_sync(text, driver_state, sync_push)
+
+    category, params = mapped
+
+    # 从用户文本中提取歌手名（用于音乐搜索）
+    if category == "music_control" and params.get("action") == "play":
+        import re
+        normalized = re.sub(r"\s+", "", text)
+        singer_match = re.search(
+            r"(播放|放一下|来一首|听一下)(.*?)(的歌|歌曲|音乐|$)", normalized
+        )
+        if singer_match:
+            singer = singer_match.group(2)
+            if singer and singer not in ("音乐", "歌", "歌曲"):
+                params["singer"] = singer
+
+    # 调用 ControlExecutor 执行
+    push("step", {
+        "id": f"exec_{category}",
+        "label": f"执行控制：{category}",
+        "status": "running",
+        "stage": "tool",
+        "tool": category,
+        "args": params,
+    })
+
+    orch = _get_orchestrator()
+    exec_result = orch.control_executor.execute(category, params, text)
+
+    push("step", {
+        "id": f"exec_{category}_done",
+        "label": f"控制完成：{exec_result.reply_text}",
+        "status": "done",
+        "stage": "tool",
+        "tool": category,
+        "result": exec_result.reply_text,
+    })
+
+    reply = exec_result.reply_text
+    push("final", {"text": reply})
+    return {
+        "reply": reply,
+        "steps": 2,
+        "status": "success",
+        "safety_level": "normal",
+        "route": "quick",
+        "intent_plan": {
+            "mode": "quick",
+            "intents": [{"category": category, "action": action_code}],
+            "needs_clarification": False,
+            "overall_summary": f"本地快速匹配 → {action_code}",
+        },
+    }
+
+
+def _run_readonly_route_sync(text: str, driver_state: dict, sync_push=None) -> dict:
+    """只读模式路由：强制安全等级为 readonly，仅允许查询和告警工具。"""
+    def noop_push(event_type: str, data: dict):
+        return None
+
+    push = sync_push or noop_push
+    push("step", {
+        "id": "agent_mode",
+        "label": "决策模式：安全模式（只读）",
+        "status": "done",
+        "stage": "agent",
+    })
+
+    # 强制设置安全等级为 readonly
+    forced_ds = dict(driver_state or {})
+    forced_ds["_force_safety"] = "readonly"
+
+    # 复用 ReAct 推理，但通过 _force_safety 标志限制工具集
+    def react_callback(event_type: str, data: dict):
+        if event_type == "think":
+            push("step", {
+                "id": f"think_{time.time_ns()}",
+                "label": data.get("thought", "推理中"),
+                "status": "done",
+                "stage": "agent",
+            })
+        elif event_type == "tool_call":
+            push("step", {
+                "id": f"tool_call_{time.time_ns()}",
+                "label": f"调用工具：{data.get('tool', '')}",
+                "status": "running",
+                "stage": "tool",
+                "tool": data.get("tool", ""),
+                "args": data.get("args", {}),
+            })
+        elif event_type == "tool_result":
+            push("step", {
+                "id": f"tool_result_{time.time_ns()}",
+                "label": f"工具完成：{data.get('tool', '')}",
+                "status": "done",
+                "stage": "tool",
+                "tool": data.get("tool", ""),
+                "result": data.get("result", ""),
+            })
+        elif event_type in {"navigation", "attractions", "weather_query", "trip_plan"}:
+            push(event_type, data)
+        elif event_type == "error":
+            push("step", {
+                "id": f"agent_error_{time.time_ns()}",
+                "label": data.get("message", "Agent 执行异常"),
+                "status": "error",
+                "stage": "agent",
+            })
+
+    result = get_react_agent().chat(text, forced_ds, callbacks=[react_callback])
+    reply = result.get("reply", "")
+    push("final", {"text": reply})
+    return {
+        "reply": reply,
+        "steps": result.get("steps", 0),
+        "status": result.get("status", "success"),
+        "safety_level": "readonly",
+        "route": "readonly",
+        "intent_plan": {
+            "mode": "readonly",
+            "intents": [],
+            "needs_clarification": False,
+            "overall_summary": "只读模式：仅允许查询和告警",
+        },
+    }
 
 def get_camera_state() -> dict:
     """获取摄像头实时状态（安全包装，摄像头未启动时返回 None）"""
@@ -352,7 +653,26 @@ app.mount("/static/music", StaticFiles(directory=_MUSIC_DIR), name="music_static
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "system": "EdgeGuard"}
+    """健康检查 — 确认模型工厂就绪状态"""
+    model_status = {"fast_model": "ok", "reasoning_model": "ok"}
+    try:
+        from modules.ai.model_factory import create_fast_model, create_reasoning_model
+    except ImportError as e:
+        logger.warning("model_factory 导入失败: %s", e)
+        return {"status": "ok", "system": "EdgeGuard",
+                "fast_model": "error", "reasoning_model": "error",
+                "import_error": str(e)}
+    try:
+        create_fast_model()
+    except Exception as e:
+        model_status["fast_model"] = "error"
+        logger.warning("fast_model 创建失败: %s", e)
+    try:
+        create_reasoning_model()
+    except Exception as e:
+        model_status["reasoning_model"] = "error"
+        logger.warning("reasoning_model 创建失败: %s", e)
+    return {"status": "ok", "system": "EdgeGuard", **model_status}
 
 
 @app.get("/api/tts")
@@ -812,6 +1132,7 @@ class AgentChatRequest(BaseModel):
     text: str = ""
     gesture: str = ""
     driver_state: dict = {}
+    route: str = "auto"  # auto | quick | react | multi | readonly
 
 
 def _sse_event(event_type: str, data: dict) -> str:
@@ -838,18 +1159,21 @@ async def agent_chat(req: AgentChatRequest, stream: bool = False):
 
         def sync_run():
             try:
-                response = _get_orchestrator().process(
-                    text=req.text,
-                    driver_state=driver_state,
+                agent_result = _run_unified_agent_sync(
+                    req.text, driver_state, queue_push,
                     callbacks={
                         "on_intent": lambda plan: queue_push("intent", plan),
                         "on_step": lambda step: queue_push("step", step),
                         "on_result": lambda result: queue_push("result", result),
                     },
+                    route=req.route,
                 )
-                queue_push("final", {"text": response.overall_reply})
-                for event_type, data in iter_structured_result_events(response):
-                    queue_push(event_type, data)
+                queue_push("final", {"text": agent_result.get("reply", "")})
+                # 推送结构化结果（orchestrator 路径）
+                orch_response = agent_result.get("orchestrator_response")
+                if orch_response:
+                    for event_type, data in iter_structured_result_events(orch_response):
+                        queue_push(event_type, data)
             finally:
                 loop.call_soon_threadsafe(event_queue.put_nowait, None)
 
@@ -893,6 +1217,7 @@ async def agent_chat(req: AgentChatRequest, stream: bool = False):
                 "on_step": lambda step: sync_push("step", step),
                 "on_result": lambda result: sync_push("result", result),
             },
+            route=req.route,
         )
 
         sid = _current_session_id

@@ -1,0 +1,42 @@
+# docker-compose.yml — 全栈部署（后端 + 前端 + 网易云音乐 API）
+version: '3.8'
+
+services:
+  # 网易云音乐 API（Node.js，端口 3000）
+  music-api:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./tools/netease-cloud-music-api:/app
+    command: sh -c "npm install && node app.js"
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  # 后端 FastAPI（端口 8000）
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./data/music:/app/data/music
+      - ./.env:/app/.env:ro
+    environment:
+      - CAMERA_ENABLED=0
+    restart: unless-stopped
+    depends_on:
+      - music-api
+
+  # 前端 Vue3 + Nginx（端口 8005 → 80）
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "8005:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

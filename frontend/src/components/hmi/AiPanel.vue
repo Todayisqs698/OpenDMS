@@ -154,7 +154,7 @@ import { renderMarkdown } from '@/lib/markdown'
 import { agentRoutes, mockAgentResults, mockAgentTrace, quickReplies, safetyGateMap, type AgentRoute, type AgentTraceStep, type ChatMessage, type SafetyLevel } from '@/lib/edgeguard'
 
 const props = defineProps<{ messages: ChatMessage[] }>()
-const emit = defineEmits<{ send: [text: string]; 'speak-reply': [text: string]; close: [] }>()
+const emit = defineEmits<{ send: [text: string, route: AgentRoute]; 'speak-reply': [text: string]; close: [] }>()
 
 const input = ref('')
 const recording = ref(false)
@@ -190,7 +190,7 @@ const lastAssistant = computed(() => [...props.messages].reverse().find(m => m.r
 function submit(text: string) {
   const t = text.trim()
   if (!t) return
-  emit('send', t)
+  emit('send', t, route.value)
   input.value = ''
   if (t.includes('疲劳') || t.includes('累了')) safetyLevel.value = 'attn_declining'
   else if (t.includes('分心')) safetyLevel.value = 'distracted'

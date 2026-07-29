@@ -22,15 +22,26 @@ sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 
 # 原有导入
 from modules.ai.fatigue_predictor import batch_predict
+# 新增：BaseScaffoldAgent + Pydantic Schema
+from modules.ai.base_agent import BaseScaffoldAgent
+from modules.ai.schemas import SafetyAgentInput, SafetyOutput, RiskLevel, AgentStatus
 
-class SafetyAgent:
-    """安全 Agent — 驾驶员状态监控"""
+class SafetyAgent(BaseScaffoldAgent[SafetyAgentInput, SafetyOutput]):
+    """安全 Agent — 驾驶员状态监控
+
+    改造后继承 BaseScaffoldAgent，对外统一入口 run(context)。
+    原有 analyze() / calculate_risk() 保持不变，供旧调用方兼容。
+    """
+
+    input_model = SafetyAgentInput
+    output_model = SafetyOutput
 
     def __init__(self):
         self.state = "normal"
         self.consecutive_warnings = 0
         self.blink_count = 0
         self.last_ear_low = False
+        super().__init__()
 
     def _calc_perclos_blink(self, eye_frames: list[dict]) -> tuple[float, int]:
         """
@@ -175,6 +186,67 @@ class SafetyAgent:
             "alert_msg": result["alert_msg"],
             "fatigue_level": result["metrics"]["fatigue_level"]
         }
+
+    # ── BaseScaffoldAgent 实现 ──
+
+    def _run_impl(self, context: SafetyAgentInput) -> SafetyOutput:
+        """统一入口：SafetyAgentInput → 现有 analyze() → SafetyOutput
+
+        复用现有业务逻辑，仅在输出端加 Pydantic 校验。
+        当入参携带预计算的 fatigue_score / perclos 时，优先使用这些指标判定风险。
+        """
+        # 合并 raw_data 与结构化字段：结构化字段为 canonical，
+        # raw_data 仅补充 eye_frames（PERCLOS 计算需要原始帧序列）
+        data = {
+            "gaze": {"state": context.gaze, "duration": 0},
+            "head_pose": {
+                "pitch": context.head_pitch,
+                "yaw": context.head_yaw,
+                "roll": context.head_roll,
+            },
+            "eye_frames": [],
+        }
+        # raw_data 中的 eye_frames 覆盖默认空列表
+        if context.raw_data and context.raw_data.get("eye_frames"):
+            data["eye_frames"] = context.raw_data["eye_frames"]
+
+        result = self.analyze(data)
+
+        risk_level = result.get("risk_level", "normal")
+        metrics = result.get("metrics", {})
+
+        # 预计算指标覆盖：当入参的 fatigue_score / perclos 指示更高风险时，覆盖 analyze 结果
+        if context.fatigue_score >= 70 or context.perclos >= 0.3:
+            if context.fatigue_score >= 80 or context.perclos >= 0.5:
+                risk_level = "dangerous"
+                result["alert_msg"] = result.get("alert_msg") or "重度疲劳，建议立即靠边停车休息"
+            elif risk_level == "normal":
+                risk_level = "attn_declining"
+                result["alert_msg"] = result.get("alert_msg") or "检测到疲劳迹象，注意力下降，建议短暂休整"
+            metrics["fatigue_score"] = context.fatigue_score
+            metrics["perclos"] = context.perclos
+
+        # 知识库引用：根据风险等级关联 safety_guidelines.txt 的章节
+        knowledge_refs: list[str] = []
+        if risk_level == "dangerous":
+            knowledge_refs = ["[SAFETY:§1]", "[SAFETY:§2]", "[SAFETY:§5]"]
+        elif risk_level == "distracted":
+            knowledge_refs = ["[SAFETY:§3]", "[SAFETY:§5]"]
+        elif risk_level == "attn_declining":
+            knowledge_refs = ["[SAFETY:§2]", "[SAFETY:§5]"]
+
+        return SafetyOutput(
+            status=AgentStatus.SUCCEEDED,
+            risk_level=RiskLevel(risk_level),
+            risk_score=metrics.get("fatigue_score", 0),
+            primary_factor=risk_level,
+            recommendation=result.get("alert_msg", ""),
+            should_veto=(risk_level == "dangerous"),
+            safety_knowledge_refs=knowledge_refs,
+            evidence_ids=knowledge_refs,
+            alert_msg=result.get("alert_msg", ""),
+            metrics=metrics,
+        )
 
 # 本地自测入口
 if __name__ == "__main__":

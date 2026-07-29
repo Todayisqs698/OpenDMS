@@ -257,8 +257,8 @@ onAlert((h) => {
   }
 })
 
-// ── AI chat handler — 全部走 ReAct Agent，Agent 自己判断调什么工具 ──
-async function handleSend(text: string) {
+// ── AI chat handler — 根据前端选择的路由模式分发到不同执行路径 ──
+async function handleSend(text: string, route: string = 'auto') {
   const userMsg: ChatMessage = { id: `u${Date.now()}`, role: 'user', text }
   chatMessages.value = [...chatMessages.value, userMsg]
 
@@ -273,6 +273,7 @@ async function handleSend(text: string) {
       body: JSON.stringify({
         text,
         gesture: '',
+        route,
         driver_state: {
           risk: telemetry.value.level === 'dangerous' ? 'high' : telemetry.value.level === 'distracted' ? 'medium' : 'safe',
           fatigue: telemetry.value.fatigue > 50,

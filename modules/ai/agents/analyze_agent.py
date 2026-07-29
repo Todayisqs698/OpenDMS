@@ -22,14 +22,25 @@
 import logging
 from typing import List, Dict, Any
 
+from modules.ai.base_agent import BaseScaffoldAgent
+from modules.ai.schemas import AnalyzeAgentInput, DrivingAnalysisOutput, AgentStatus
+
 logger = logging.getLogger(__name__)
 
 
-class AnalyzeAgent:
-    """驾驶分析智能体"""
+class AnalyzeAgent(BaseScaffoldAgent[AnalyzeAgentInput, DrivingAnalysisOutput]):
+    """驾驶分析智能体
+
+    改造后继承 BaseScaffoldAgent，对外统一入口 run(context)。
+    原有 analyze() 保持不变，供旧调用方兼容。
+    """
+
+    input_model = AnalyzeAgentInput
+    output_model = DrivingAnalysisOutput
 
     def __init__(self):
         self._llm_client = None
+        super().__init__()
 
     @property
     def llm(self):
@@ -175,7 +186,7 @@ class AnalyzeAgent:
 语气亲切，像朋友一样。"""
 
         response = self.llm.client.chat.completions.create(
-            model="deepseek-v4-flash",
+            model=self.llm.chat_model,
             messages=[
                 {"role": "system", "content": "你是专业的驾驶行为分析师，回答简洁亲切。"},
                 {"role": "user", "content": prompt},
@@ -200,3 +211,42 @@ class AnalyzeAgent:
             tips.append("保持良好的驾驶习惯，安全第一")
 
         return tips[:3]
+
+    # ── BaseScaffoldAgent 实现 ──
+
+    def _run_impl(self, context: AnalyzeAgentInput) -> DrivingAnalysisOutput:
+        """统一入口：AnalyzeAgentInput → 现有 analyze() → DrivingAnalysisOutput"""
+        data = {
+            "duration_min": context.duration_min,
+            "distractions": context.distractions,
+            "severe_distractions": context.severe_distractions,
+            "attention_score": context.attention_score,
+            "avg_gaze": context.avg_gaze,
+            "fatigue_level": context.fatigue_level,
+        }
+        result = self.analyze(data)
+
+        # fatigue_trend 推断
+        fatigue = context.fatigue_level
+        if fatigue == "normal":
+            trend = "stable"
+        elif fatigue in ("warning", "dangerous"):
+            trend = "declining"
+        else:
+            trend = "stable"
+
+        return DrivingAnalysisOutput(
+            status=AgentStatus.SUCCEEDED if result.get("success") else AgentStatus.FAILED,
+            session_duration_min=context.duration_min,
+            total_alerts=context.total_alerts or context.distractions,
+            alert_breakdown={},
+            fatigue_trend=trend,
+            primary_distraction_cause=context.avg_gaze if context.avg_gaze != "center" else "",
+            improvement_suggestions=result.get("improvements", []),
+            historical_comparison=f"近30天平均: {context.avg_alerts_30d}",
+            summary=result.get("summary", ""),
+            score=result.get("score", 100),
+            grade=result.get("grade", "A"),
+            highlights=result.get("highlights", []),
+            safety_tips=result.get("safety_tips", []),
+        )

@@ -1,0 +1,21 @@
+# Dockerfile.backend-server — 服务器精简镜像（无摄像头/MediaPipe/Whisper）
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# 先装依赖（利用 Docker 层缓存）
+COPY requirements-server.txt .
+RUN pip install --no-cache-dir -r requirements-server.txt
+
+# 复制项目代码
+COPY . .
+
+# 数据持久化目录
+RUN mkdir -p /app/data
+
+# 服务器无摄像头硬件
+ENV CAMERA_ENABLED=0
+
+EXPOSE 8000
+
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

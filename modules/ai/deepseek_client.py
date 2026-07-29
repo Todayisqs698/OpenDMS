@@ -51,6 +51,12 @@ class DeepSeekClient:
             base_url="https://api.deepseek.com"
         )
         self.conversation_history = []
+        self._chat_model = os.getenv('DEEPSEEK_CHAT_MODEL', 'deepseek-chat')
+
+    @property
+    def chat_model(self) -> str:
+        """当前使用的 chat 模型名（从环境变量读取，运行时可热更新）"""
+        return os.getenv('DEEPSEEK_CHAT_MODEL', self._chat_model)
 
     def reload(self) -> None:
         """重新读取 API Key 并重建客户端（运行时配置热更新后调用）。"""
@@ -60,6 +66,7 @@ class DeepSeekClient:
             base_url="https://api.deepseek.com"
         )
         self.conversation_history = []
+        self._chat_model = os.getenv('DEEPSEEK_CHAT_MODEL', 'deepseek-chat')
 
     @property
     def is_available(self) -> bool:
@@ -187,7 +194,7 @@ class DeepSeekClient:
 
             # 调用DeepSeek API
             response = self.client.chat.completions.create(
-                model="deepseek-v4-flash",
+                model=self.chat_model,
                 messages=[
                     {
                         "role": "system",
@@ -268,7 +275,7 @@ class DeepSeekClient:
 
         try:
             response = self.client.chat.completions.create(
-                model="deepseek-v4-flash",
+                model=self.chat_model,
                 messages=[
                     {
                         "role": "system",
@@ -368,7 +375,7 @@ class DeepSeekClient:
             }
         """
         kwargs = {
-            "model": "deepseek-v4-flash",
+            "model": self.chat_model,
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,

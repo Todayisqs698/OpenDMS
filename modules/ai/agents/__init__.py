@@ -8,6 +8,7 @@ EdgeGuard 子 Agent 集合
 - diagnose_agent: 故障诊断（RAG + LLM）
 - analyze_agent: 驾驶行为分析
 - recommend_agent: 出行建议（天气/导航）
+- evidence_audit: 真实性审计（冲突检测/数字溯源）
 """
 
 from .safety_agent import SafetyAgent
@@ -16,6 +17,7 @@ from .environment_agent import EnvironmentAgent
 from .diagnose_agent import DiagnoseAgent
 from .analyze_agent import AnalyzeAgent
 from .recommend_agent import RecommendAgent
+from .evidence_audit import EvidenceAuditAgent
 
 __all__ = [
     "SafetyAgent",
@@ -24,4 +26,5 @@ __all__ = [
     "DiagnoseAgent",
     "AnalyzeAgent",
     "RecommendAgent",
+    "EvidenceAuditAgent",
 ]
