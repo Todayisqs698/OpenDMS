@@ -36,16 +36,22 @@
 │  👁️ 视觉感知 (全本地)  │     │  🧠 AI 决策引擎                │
 │  MediaPipe Face 468点 │     │  DeepSeek LLM API             │
 │  PnP 头部姿态估计     │     │  ┌──────────────────────────┐  │
-│  手势识别 16 种手势   │     │  │ IntentionAgent → 意图分解 │  │
-│  PERCLOS 疲劳检测     │     │  │ ControlExecutor → 直调API │  │
-│  OpenCV 摄像头管线    │     │  │ ReAct Agent → 思考-行动   │  │
-└───────────────────────┘     │  │ RecommendAgent → 推荐     │  │
+│  手势识别 16 种手势   │     │  │ Multi-Agent LangGraph     │  │
+│  PERCLOS 疲劳检测     │     │  │ 三层拓扑 + VETO + 审计   │  │
+│  OpenCV 摄像头管线    │     │  │ SafetyAgent → 风险分级    │  │
+└───────────────────────┘     │  │ AnalyzeAgent → 行为分析   │  │
                               │  │ DiagnoseAgent → 故障诊断  │  │
-┌───────────────────────┐     │  │ TripPlanner → 行程规划    │  │
-│  🎤 语音 (本地优先)    │     │  │ Safety Gate → 安全门控   │  │
-│  Whisper 语音识别      │     │  └──────────────────────────┘  │
-│  edge-tts 语音合成     │     │  Critic → 行程校验             │
-│  WebRTC VAD + 降噪    │     └───────────────────────────────┘
+┌───────────────────────┐     │  │ RecommendAgent → 推荐     │  │
+│  🎤 语音 (本地优先)    │     │  │ EvidenceAudit → 证据溯源 │  │
+│  Whisper 语音识别      │     │  │ Route Classifier → 路由  │  │
+│  edge-tts 语音合成     │     │  │ Model Factory → 模型路由 │  │
+│  WebRTC VAD + 降噪    │     │  │ Safety Gate → 安全门控   │  │
+└───────────────────────┘     │  └──────────────────────────┘  │
+                              │  Structured Output → 六步校验  │
+┌───────────────────────┐     │  FAISS RAG → 知识检索          │
+│  📚 知识库 (全本地)    │     └───────────────────────────────┘
+│  ADAS 标准 / 交通法规  │
+│  安全指南 / 车辆诊断   │
 └───────────────────────┘
 ```
 
@@ -89,6 +95,11 @@
 EdgeGuard/
 ├── backend/                         # FastAPI 后端 (:8000)
 │   ├── main.py                      # 主入口 — 50+ API 端点 + WebSocket
+│   ├── alembic/                     # 数据库迁移 (Alembic)
+│   │   ├── env.py                   # 迁移环境配置
+│   │   └── versions/                # 迁移版本
+│   │       ├── 001_initial.py       # 初始表结构
+│   │       └── 002_add_alert_type.py
 │   └── app/
 │       ├── camera.py                # 摄像头引擎 — MediaPipe + JPEG 推流
 │       ├── core/database.py         # SQLite — 告警/交互/会话
@@ -123,10 +134,17 @@ EdgeGuard/
 │
 ├── modules/                         # AI + 感知核心
 │   ├── ai/                          # AI 决策层
-│   │   ├── agent_graph.py           # ReAct Agent 循环
+│   │   ├── multi_agent_graph.py     # LangGraph 六 Agent 编排器 (三层拓扑+VETO+审计)
+│   │   ├── agent_graph.py           # ReAct Agent 循环 (LangGraph StateGraph)
+│   │   ├── base_agent.py            # Agent 基类 (Pydantic 入参/出参校验)
+│   │   ├── schemas.py               # Agent Input/Output Pydantic 模型定义
+│   │   ├── model_factory.py         # 模型工厂 (快速模型/推理模型路由)
+│   │   ├── structured_output.py     # 结构化输出 (LLM→Pydantic 六步校验链)
+│   │   ├── route_classifier.py      # 路由分类器 (quick/react/multi/readonly)
 │   │   ├── orchestrator.py          # 多 Agent 编排引擎
-│   │   ├── intention_agent.py       # 意图分解 (规则+LLM双通道)
-│   │   ├── intent_guard.py          # 安全门控 + 槽位验证
+│   │   ├── intention_agent.py       # 意图分解 (规则+LLM 双通道)
+│   │   ├── intent_guard.py          # 意图安全守卫
+│   │   ├── safety_gate.py           # 安全门控 — 风险等级→工具白名单过滤
 │   │   ├── tools.py                 # Function Calling 工具 (14 个)
 │   │   ├── deepseek_client.py       # DeepSeek LLM 客户端
 │   │   ├── memory.py                # Agent 长短期记忆
@@ -134,36 +152,77 @@ EdgeGuard/
 │   │   ├── location_store.py        # GPS 位置持久化
 │   │   ├── structured_results.py    # 结构化结果推送
 │   │   ├── edge_cloud_router.py     # 边缘-云端混合路由
-│   │   ├── local_decision_engine.py # 本地关键词决策
+│   │   ├── local_decision_engine.py # 本地关键词决策 (37 条关键词+手势映射)
 │   │   ├── fallback_handler.py      # 离线降级
 │   │   ├── prompts/                 # Prompt 模板库
-│   │   ├── agents/                  # 子 Agent
-│   │   │   ├── recommend_agent.py   # 推荐 (导航/天气/景点/行程)
-│   │   │   ├── interaction_agent.py # 交互
-│   │   │   ├── environment_agent.py # 环境感知
-│   │   │   ├── analyze_agent.py     # 驾驶分析
-│   │   │   └── diagnose_agent.py    # 故障诊断
+│   │   ├── agents/                  # 子 Agent (7 个)
+│   │   │   ├── safety_agent.py      # 安全 Agent — 四级风险分级 + VETO 短路
+│   │   │   ├── interaction_agent.py # 交互 Agent — 手势+语音→意图解析
+│   │   │   ├── evidence_audit.py    # 证据审计 Agent — 引用溯源+矛盾检测
+│   │   │   ├── analyze_agent.py     # 驾驶分析 Agent — 行为模式分析
+│   │   │   ├── diagnose_agent.py    # 诊断 Agent — 车辆故障诊断
+│   │   │   ├── recommend_agent.py   # 推荐 Agent — 行程规划与景点推荐
+│   │   │   └── environment_agent.py # 环境感知 Agent
 │   │   └── trip_planner/            # 行程规划引擎
-│   │       ├── agent.py             # TripPlanner Agent + LLM编排
+│   │       ├── agent.py             # TripPlanner Agent + LLM 编排
 │   │       ├── critic.py            # 校验器 (6 个确定性检查)
 │   │       ├── schemas.py           # TripRequest + 约束提取
 │   │       ├── task_manager.py      # 异步任务管理
 │   │       └── xhs_service.py       # 小红书数据增强
 │   ├── vision/                      # 视觉感知 (全本地)
-│   │   ├── face_tracker.py          # MediaPipe 面部追踪
-│   │   ├── hand_gesture.py          # 手势识别
+│   │   ├── face_tracker.py          # MediaPipe 面部 468 点追踪
+│   │   ├── hand_gesture.py          # 手势识别 (几何规则)
 │   │   └── gesture_classifier.py    # TFLite 手势分类器
 │   └── audio/                       # 语音感知
 │       ├── speech_recognizer.py     # Whisper 语音转写
-│       └── audio_pipeline.py        # 音频采集管线
+│       ├── recorder.py              # 麦克风录音管理
+│       └── audio_pipeline.py        # 音频采集管线 + TTS 播报队列
 │
 ├── data/
-│   ├── edgeguard.db                 # SQLite 数据库
+│   ├── edgeguard.db                 # SQLite 数据库 (运行时生成)
+│   ├── knowledge/                   # 知识库 (FAISS 向量检索)
+│   │   ├── adas_standards.txt       # ADAS 驾驶辅助标准
+│   │   ├── safety_guidelines.txt    # 安全驾驶指南
+│   │   ├── traffic_laws.txt         # 交通法规
+│   │   ├── vehicle_diagnostics.txt  # 车辆故障诊断知识
+│   │   └── trip_templates.json      # 行程模板
 │   └── music/                       # 本地音乐文件
 │
-├── picture/                         # 项目截图
+├── tests/                           # 测试套件
+│   ├── unit/                        # 单元测试
+│   │   ├── test_gesture_map.py
+│   │   ├── test_local_decision.py
+│   │   ├── test_memory.py
+│   │   ├── test_safety_gate.py
+│   │   └── test_tool_schemas.py
+│   ├── integration/                 # 集成测试
+│   │   ├── test_api_endpoints.py
+│   │   └── test_database.py
+│   ├── test_base_agent.py           # Agent 基类测试
+│   ├── test_evidence_audit.py       # 证据审计测试
+│   ├── test_model_factory.py        # 模型工厂测试
+│   ├── test_multi_agent_graph.py    # 多 Agent 编排测试
+│   ├── test_route_classifier.py     # 路由分类器测试
+│   ├── test_schemas.py              # Schema 校验测试
+│   └── conftest.py                  # Pytest fixtures
+│
+├── EdgeGuard设计文档/               # LaTeX 毕业设计论文
+│   ├── main.tex                     # 论文主文件
+│   ├── reference.bib                # 参考文献
+│   └── style/                       # 样式文件
+│
+├── Dockerfile.backend               # 后端 Docker 镜像
+├── Dockerfile.backend-server        # 服务器版 Docker 镜像
+├── Dockerfile.frontend              # 前端 Docker 镜像
+├── docker-compose.yml               # 本地开发编排
+├── docker-compose.dev.yml           # 开发环境编排
+├── docker-compose.server.yml        # 服务器部署编排
+├── nginx.conf                       # Nginx 反向代理配置
+├── pytest.ini                       # Pytest 配置
 ├── requirements.txt                 # Python 依赖
-├── start.bat                        # 一键启动脚本
+├── requirements-dev.txt             # 开发依赖
+├── requirements-server.txt          # 服务器依赖
+├── start.bat                        # 一键启动脚本 (Windows)
 ├── .env.example                     # 环境变量模板
 └── README.md
 ```
@@ -176,13 +235,17 @@ EdgeGuard/
 |------|------|
 | 视觉 | OpenCV + MediaPipe Face Landmarker (468 点) + PnP |
 | 语音 | Whisper (本地转写) + edge-tts (TTS) + WebRTC VAD |
-| AI 编排 | Multi-Agent Orchestrator + ReAct Loop |
-| 大模型 | DeepSeek API (deepseek-v4-flash) |
-| Agent | Function Calling + GoalStack + ReflectionEngine |
-| 后端 | FastAPI + WebSocket + uvicorn |
+| AI 编排 | LangGraph Multi-Agent (三层拓扑 + VETO + 证据审计) |
+| Agent 框架 | BaseScaffoldAgent + Pydantic 校验 + 六步结构化输出链 |
+| 大模型 | DeepSeek API (deepseek-v4-flash)，支持 OpenAI/Anthropic 备用 |
+| 模型路由 | ModelFactory (快速模型/推理模型自动选择) |
+| 知识检索 | FAISS 向量检索 + RAG 生成 |
+| 后端 | FastAPI + WebSocket + uvicorn + Alembic |
 | 前端 | Vue 3.4 + Vite 5 + Tailwind CSS 4 + Element Plus + Leaflet |
 | 数据库 | SQLite (告警/交互/会话持久化) |
 | 地图 | OSRM (路线) + 高德 REST API (POI) + Leaflet (展示) |
+| 部署 | Docker + Docker Compose + Nginx 反向代理 |
+| 测试 | Pytest + pytest-asyncio (单元/集成/E2E) |
 
 ---
 
@@ -225,6 +288,35 @@ cd frontend && npm run dev                              # 前端 (:8005)
 ```
 
 浏览器打开 `http://localhost:8005`。无摄像头时安全面板显示模拟数据，AI 对话、导航、空调、行程规划等功能正常使用。
+
+### Docker 部署
+
+```bash
+# 本地开发
+docker-compose -f docker-compose.dev.yml up -d
+
+# 服务器部署
+docker-compose -f docker-compose.server.yml up -d
+```
+
+### 运行测试
+
+```bash
+# 安装开发依赖
+pip install -r requirements-dev.txt
+
+# 运行全部测试
+pytest
+
+# 仅单元测试
+pytest tests/unit/
+
+# 仅集成测试
+pytest tests/integration/
+
+# 带覆盖率报告
+pytest --cov=modules --cov-report=html
+```
 
 ---
 
@@ -293,6 +385,18 @@ cd frontend && npm run dev                              # 前端 (:8005)
 | `ANTHROPIC_API_KEY` | - | Anthropic 备用 |
 | `OPENWEATHER_API_KEY` | - | OpenWeatherMap 备用 |
 | `XHS_COOKIE` | - | 小红书 Cookie（景点数据增强，可选） |
+
+---
+
+## 设计文档
+
+完整的系统设计与技术方案详见 `EdgeGuard设计文档/`（LaTeX 毕业设计论文），涵盖：
+- 系统需求分析与架构设计
+- 多模态感知融合方案
+- LangGraph 多 Agent 协作机制
+- 安全门控与四层风险分级
+- 结构化输出六步校验链
+- 边缘-云端混合路由策略
 
 ---
 
