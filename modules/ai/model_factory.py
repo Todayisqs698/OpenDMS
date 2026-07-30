@@ -168,7 +168,7 @@ AGENT_MODEL = {
     "recommend":      create_reasoning_model,
     "environment":    create_reasoning_model,  # 环境分析需要推理
     "evidence_audit": create_fast_model,  # 审计用快速模型够用
-    "orchestrator":   create_reasoning_model,  # 主编排/多 agent 图使用推理模型
+    "orchestrator":   create_fast_model,  # 主编排/多 agent 图需要可靠的工具调用，使用快速模型
 }
 
 
