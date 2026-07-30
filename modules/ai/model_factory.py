@@ -1,9 +1,10 @@
 """
 模型工厂 — 按能力创建模型实例，模型名从 Settings（环境变量）读取
 
-两种能力:
+三种能力:
   - create_fast_model():      快速模型（豆包 Lite → 降级 DeepSeek Chat）
   - create_reasoning_model(): 推理模型（DeepSeek Reasoner → 降级豆包 Lite）
+  - create_chat_model():      对话/编排模型（DeepSeek Chat (V3) → 降级豆包 Lite）
 
 Agent → 模型映射通过 AGENT_MODEL 字典 + get_model_for_agent() 实现。
 
@@ -158,6 +159,38 @@ def create_reasoning_model() -> ModelClient:
     raise RuntimeError("reasoning model: DEEPSEEK_API_KEY 和 DOUBAO_API_KEY 均为空")
 
 
+def create_chat_model() -> ModelClient:
+    """
+    对话 / 编排模型 — 用于 Orchestrator（工具调用 + 对话合成）。
+    优先 DeepSeek Chat (V3)，不可用时降级到豆包 Lite。
+    不使用 Reasoner (R1)，因为编排层需要快速可靠的 function calling，而非深度推理。
+    """
+    s = _get_settings()
+    if s["deepseek_api_key"]:
+        logger.info("chat model: %s @ deepseek", s["deepseek_chat_model"])
+        return ModelClient(
+            client=OpenAI(
+                api_key=s["deepseek_api_key"],
+                base_url=s["deepseek_base_url"],
+                timeout=s["model_timeout"],
+                max_retries=s["model_max_retries"],
+            ),
+            model_name=s["deepseek_chat_model"],
+        )
+    if s["doubao_api_key"]:
+        logger.warning("chat model: DeepSeek 不可用，降级到豆包 Lite")
+        return ModelClient(
+            client=OpenAI(
+                api_key=s["doubao_api_key"],
+                base_url=s["doubao_base_url"],
+                timeout=s["model_timeout"],
+                max_retries=s["model_max_retries"],
+            ),
+            model_name=s["doubao_fast_model"],
+        )
+    raise RuntimeError("chat model: DEEPSEEK_API_KEY 和 DOUBAO_API_KEY 均为空")
+
+
 # Agent → 模型映射（轻量路由，不硬编码模型名）
 AGENT_MODEL = {
     "safety":         create_fast_model,
@@ -168,7 +201,7 @@ AGENT_MODEL = {
     "recommend":      create_reasoning_model,
     "environment":    create_reasoning_model,  # 环境分析需要推理
     "evidence_audit": create_fast_model,  # 审计用快速模型够用
-    "orchestrator":   create_fast_model,  # 主编排/多 agent 图需要可靠的工具调用，使用快速模型
+    "orchestrator":   create_chat_model,  # 编排层需要可靠的工具调用，使用 DeepSeek Chat (V3)
 }
 
 
