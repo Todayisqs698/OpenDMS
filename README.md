@@ -238,7 +238,7 @@ EdgeGuard/
 | 语音 | Whisper (本地转写) + edge-tts (TTS) + WebRTC VAD |
 | AI 编排 | LangGraph Multi-Agent (三层拓扑 + VETO + 证据审计) |
 | Agent 框架 | BaseScaffoldAgent + Pydantic 校验 + 六步结构化输出链 |
-| 大模型 | DeepSeek API (deepseek-v4-flash)，支持 OpenAI/Anthropic 备用 |
+| 大模型 | ModelFactory 路由：DeepSeek Reasoner(推理) + 豆包 Lite(快速) + DeepSeek Chat(降级) |
 | 模型路由 | ModelFactory (快速模型/推理模型自动选择) |
 | 知识检索 | FAISS 向量检索 + RAG 生成 |
 | 后端 | FastAPI + WebSocket + uvicorn + Alembic |

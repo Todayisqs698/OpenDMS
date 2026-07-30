@@ -91,10 +91,8 @@ def _get_settings() -> dict[str, Any]:
         "deepseek_chat_model": os.getenv("DEEPSEEK_CHAT_MODEL", "deepseek-chat"),
         "deepseek_reasoner_model": os.getenv("DEEPSEEK_REASONER_MODEL", "deepseek-reasoner"),
 
-        "model_temperature": float(os.getenv("MODEL_TEMPERATURE", "0.3")),
         "model_timeout": int(os.getenv("MODEL_TIMEOUT", "60")),
         "model_max_retries": int(os.getenv("MODEL_MAX_RETRIES", "2")),
-        "model_max_tokens": int(os.getenv("MODEL_MAX_TOKENS", "4096")),
     }
 
 
@@ -132,7 +130,7 @@ def create_fast_model() -> ModelClient:
 def create_reasoning_model() -> ModelClient:
     """
     推理模型 — 用于 DiagnoseAgent / AnalyzeAgent / RecommendAgent。
-    优先 DeepSeek Reasoner，不可用时降级到 DeepSeek Chat。
+    优先 DeepSeek Reasoner，不可用时降级到豆包 Lite。
     """
     s = _get_settings()
     if s["deepseek_api_key"]:

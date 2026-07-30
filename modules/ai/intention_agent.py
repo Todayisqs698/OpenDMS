@@ -504,14 +504,14 @@ class IntentionAgent:
     """
 
     def __init__(self):
-        self._client = None
+        self._llm = None
 
     @property
-    def client(self):
-        if self._client is None:
+    def llm(self):
+        if self._llm is None:
             from modules.ai.model_factory import get_model_for_agent
-            self._client = get_model_for_agent("intention")
-        return self._client
+            self._llm = get_model_for_agent("intention")
+        return self._llm
 
     def analyze(self, text: str, driver_state: dict = None,
                 conversation_context: str = "") -> IntentionPlan:
@@ -657,8 +657,8 @@ class IntentionAgent:
             conversation_context=conversation_context or "（无上轮对话上下文）",
         )
 
-        response = self.client.client.chat.completions.create(
-            model=self.client.chat_model,
+        response = self.llm.client.chat.completions.create(
+            model=self.llm.chat_model,
             messages=[
                 {"role": "system", "content": "你是专业的车载意图识别引擎，只输出JSON，不要输出任何非JSON文本。"},
                 {"role": "user", "content": prompt},
