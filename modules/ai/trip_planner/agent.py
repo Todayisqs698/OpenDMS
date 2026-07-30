@@ -843,11 +843,12 @@ class EdgeGuardTripPlanner:
         temperature: float,
     ) -> str:
         try:
-            from modules.ai.deepseek_client import deepseek_client
-            if not deepseek_client.is_available:
+            from modules.ai.model_factory import get_model_for_agent
+            client = get_model_for_agent("recommend")
+            if not client.is_available:
                 return ""
-            response = deepseek_client.client.chat.completions.create(
-                model="deepseek-v4-flash",
+            response = client.client.chat.completions.create(
+                model=client.chat_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},

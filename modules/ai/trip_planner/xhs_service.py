@@ -219,8 +219,9 @@ def _robust_json_parse(content: str) -> Any:
 
     # 第 6 层: LLM 自修复（最后手段）
     try:
-        from modules.ai.deepseek_client import deepseek_client
-        if deepseek_client.is_available:
+        from modules.ai.model_factory import get_model_for_agent
+        client = get_model_for_agent("recommend")
+        if client.is_available:
             tail = json_str[-1500:] if len(json_str) > 1500 else json_str
             head = json_str[:500] if len(json_str) > 500 else json_str
             repair_prompt = (
@@ -228,8 +229,8 @@ def _robust_json_parse(content: str) -> Any:
                 "只输出修复后的完整 JSON，不要输出任何解释文字。\n\n"
                 f"开头部分:\n{head}\n\n...(中间省略)...\n\n尾部:\n{tail}"
             )
-            resp = deepseek_client.client.chat.completions.create(
-                model="deepseek-v4-flash",
+            resp = client.client.chat.completions.create(
+                model=client.chat_model,
                 messages=[{"role": "user", "content": repair_prompt}],
                 temperature=0.0,
                 max_tokens=1500,
@@ -437,8 +438,9 @@ def _llm_extract_attractions(combined_text: str, city: str) -> list[dict]:
     name, description, visit_duration, reservation_required, reservation_tips
     """
     try:
-        from modules.ai.deepseek_client import deepseek_client
-        if not deepseek_client.is_available:
+        from modules.ai.model_factory import get_model_for_agent
+        client = get_model_for_agent("recommend")
+        if not client.is_available:
             return []
     except Exception:
         return []
@@ -463,8 +465,8 @@ JSON 返回示例:
 ]
 """
     try:
-        response = deepseek_client.client.chat.completions.create(
-            model="deepseek-v4-flash",
+        response = client.client.chat.completions.create(
+            model=client.chat_model,
             messages=[{"role": "user", "content": extract_prompt}],
             temperature=0.1,
             max_tokens=4000,
@@ -638,9 +640,10 @@ def llm_enhance_attractions(
         return amap_items
 
     try:
-        from modules.ai.deepseek_client import deepseek_client
-        if not deepseek_client.is_available:
-            logger.info("LLM 增强跳过: DeepSeek 不可用")
+        from modules.ai.model_factory import get_model_for_agent
+        client = get_model_for_agent("recommend")
+        if not client.is_available:
+            logger.info("LLM 增强跳过: 模型不可用")
             return amap_items
     except Exception:
         return amap_items
@@ -689,8 +692,8 @@ JSON 返回示例:
 ]"""
 
     try:
-        response = deepseek_client.client.chat.completions.create(
-            model="deepseek-v4-flash",
+        response = client.client.chat.completions.create(
+            model=client.chat_model,
             messages=[{"role": "user", "content": enhance_prompt}],
             temperature=0.3,
             max_tokens=4000,

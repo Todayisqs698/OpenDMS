@@ -161,14 +161,20 @@ def _trigger_hot_reload(changed_keys) -> None:
     """配置更新后触发相关组件重新加载。"""
     changed_set = set(changed_keys)
 
-    # DeepSeek 客户端重建
-    if changed_set & {"DEEPSEEK_API_KEY", "OPENAI_API_KEY"}:
+    # 模型客户端重建
+    if changed_set & {"DEEPSEEK_API_KEY", "OPENAI_API_KEY", "DOUBAO_API_KEY"}:
+        try:
+            from modules.ai.model_factory import clear_model_cache
+            clear_model_cache()
+            logger.info("model_factory 缓存已清空（将在下次请求时使用新配置）")
+        except Exception as e:
+            logger.warning("model_factory 热重载失败: %s", e)
+        # 兼容旧 deepseek_client
         try:
             from modules.ai.deepseek_client import deepseek_client
             deepseek_client.reload()
-            logger.info("DeepSeek 客户端已热重载")
-        except Exception as e:
-            logger.warning("DeepSeek 客户端热重载失败: %s", e)
+        except Exception:
+            pass
 
     # XHS 签名引擎缓存重置（强制重新检查 Cookie）
     if "XHS_COOKIE" in changed_set:

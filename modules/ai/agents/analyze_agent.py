@@ -45,8 +45,8 @@ class AnalyzeAgent(BaseScaffoldAgent[AnalyzeAgentInput, DrivingAnalysisOutput]):
     @property
     def llm(self):
         if self._llm_client is None:
-            from modules.ai.deepseek_client import deepseek_client
-            self._llm_client = deepseek_client
+            from modules.ai.model_factory import get_model_for_agent
+            self._llm_client = get_model_for_agent("analyze")
         return self._llm_client
 
     def analyze(self, data: dict) -> dict:

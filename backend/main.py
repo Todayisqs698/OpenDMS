@@ -780,10 +780,11 @@ def status():
     """AI 模块加载状态 + 网络状态 + 驾驶员状态（5 秒整体超时）"""
     from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
     from modules.ai.edge_cloud_router import get_router
-    from modules.ai.deepseek_client import deepseek_client
+    from modules.ai.model_factory import get_model_for_agent
 
     def _collect():
         router = get_router()
+        llm = get_model_for_agent("orchestrator")
         try:
             import socket
             socket.create_connection(("api.deepseek.com", 443), timeout=2)
@@ -794,8 +795,8 @@ def status():
         return {
             "status": "ok",
             "offline_mode": router.is_offline(),
-            "llm_online": deepseek_client.is_available,
-            "active_engine": "DeepSeek-V3 (API)" if deepseek_client.is_available else "LocalDecisionEngine (Fallback)",
+            "llm_online": llm.is_available,
+            "active_engine": f"{llm.chat_model} (API)" if llm.is_available else "LocalDecisionEngine (Fallback)",
             "cloud_latency": router.get_cloud_latency_stats(),
             "agents": {
                 "safety": _check_agent("safety"),
@@ -851,8 +852,10 @@ class InsightRequest(BaseModel):
 @app.post("/api/drive/insight")
 def drive_insight(req: InsightRequest):
     """LLM 主动观察：判断是否有值得说的话"""
-    from modules.ai.deepseek_client import deepseek_client
+    from modules.ai.model_factory import get_model_for_agent
     from modules.ai.prompts import render
+
+    llm = get_model_for_agent("orchestrator")
 
     has_gesture = req.gaze_pattern and '手势' in req.gaze_pattern
 
@@ -871,8 +874,8 @@ def drive_insight(req: InsightRequest):
         prompt = f"观察: {req.gaze_pattern}，注意力: {req.attention}分。{trigger_hint}一切正常回NONE。"
 
     try:
-        r = deepseek_client.client.chat.completions.create(
-            model="deepseek-v4-flash",
+        r = llm.client.chat.completions.create(
+            model=llm.chat_model,
             messages=[{"role": "system", "content": "你是驾驶伙伴，语气温和亲切。有手势时自然确认一下。其他情况观察驾驶员，值得说就15字内，否则回NONE。"},
                       {"role": "user", "content": prompt}],
             max_tokens=512, temperature=0.6
@@ -896,8 +899,10 @@ class DriveReportRequest(BaseModel):
 @app.post("/api/drive/report")
 def drive_report(req: DriveReportRequest):
     """LLM 生成驾驶报告 + 疲劳趋势分析"""
-    from modules.ai.deepseek_client import deepseek_client
+    from modules.ai.model_factory import get_model_for_agent
     from modules.ai.prompts import render
+
+    llm = get_model_for_agent("orchestrator")
 
     # 使用模板库渲染 prompt（模板 ID: analysis.drive_report）
     try:
@@ -914,8 +919,8 @@ def drive_report(req: DriveReportRequest):
         prompt = f"驾驶时长{req.duration_min:.0f}分钟，分心{req.distractions}次。请生成总结和建议。"
 
     try:
-        r = deepseek_client.client.chat.completions.create(
-            model="deepseek-v4-flash",
+        r = llm.client.chat.completions.create(
+            model=llm.chat_model,
             messages=[
                 {"role": "system", "content": "你是驾驶行为分析师，回答简洁实用。"},
                 {"role": "user", "content": prompt}

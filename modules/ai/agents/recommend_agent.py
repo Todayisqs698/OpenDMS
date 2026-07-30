@@ -53,8 +53,8 @@ class RecommendAgent(BaseScaffoldAgent[RecommendAgentInput, TripPlanOutput]):
     @property
     def llm(self):
         if self._llm_client is None:
-            from modules.ai.deepseek_client import deepseek_client
-            self._llm_client = deepseek_client
+            from modules.ai.model_factory import get_model_for_agent
+            self._llm_client = get_model_for_agent("recommend")
         return self._llm_client
 
     def analyze(self, data: dict) -> dict:
@@ -388,11 +388,10 @@ class RecommendAgent(BaseScaffoldAgent[RecommendAgentInput, TripPlanOutput]):
         """Use LLM to extract destination city and days from any phrasing."""
         import json as _json
         try:
-            from modules.ai.deepseek_client import deepseek_client
-            if not deepseek_client.is_available:
+            if not self.llm.is_available:
                 return {}
-            resp = deepseek_client.client.chat.completions.create(
-                model=deepseek_client.chat_model,
+            resp = self.llm.client.chat.completions.create(
+                model=self.llm.chat_model,
                 messages=[{
                     "role": "system",
                     "content": (

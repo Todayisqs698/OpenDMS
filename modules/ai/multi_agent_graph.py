@@ -532,8 +532,9 @@ def _aggregate_node(state: MultiAgentState) -> dict:
 
     # 尝试用 LLM 合成最终回复
     try:
-        from modules.ai.deepseek_client import deepseek_client
-        if deepseek_client.is_available:
+        from modules.ai.model_factory import get_model_for_agent
+        orchestrator = get_model_for_agent("orchestrator")
+        if orchestrator.is_available:
             user_input = state.get("user_input", "")
             parts_text = "\n".join(f"- {p}" for p in parts)
             prompt = (
@@ -541,8 +542,8 @@ def _aggregate_node(state: MultiAgentState) -> dict:
                 f"用户输入: {user_input}\n\n各Agent结果:\n{parts_text}\n\n"
                 f"请直接输出回复内容，不要加前缀。"
             )
-            response = deepseek_client.client.chat.completions.create(
-                model=deepseek_client.chat_model,
+            response = orchestrator.client.chat.completions.create(
+                model=orchestrator.chat_model,
                 messages=[
                     {"role": "system", "content": "你是车载智能助手，回复简洁实用。"},
                     {"role": "user", "content": prompt},

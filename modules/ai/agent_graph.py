@@ -54,7 +54,7 @@ except Exception as e:
 from modules.ai.tools import TOOL_SCHEMAS, execute_tool
 from modules.ai.safety_gate import apply_safety_gate, get_risk_level_from_safety_agent
 from modules.ai.memory import AgentMemory
-from modules.ai.deepseek_client import deepseek_client
+from modules.ai.model_factory import get_model_for_agent
 
 # ── 全局驾驶员状态机（由 app.py 摄像头循环实时更新）──
 from modules.ai.driver_state_machine import DriverStateMachine
@@ -381,7 +381,8 @@ def agent_node(state: dict) -> dict:
 
     # 调用 LLM（传入安全门控过滤后的工具列表）
     allowed_tools = state.get("allowed_tools") or TOOL_SCHEMAS
-    llm_response = deepseek_client.chat_with_tools(
+    orchestrator = get_model_for_agent("orchestrator")
+    llm_response = orchestrator.chat_with_tools(
         messages=messages,
         tools=allowed_tools,
     )

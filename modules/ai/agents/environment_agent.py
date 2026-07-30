@@ -129,8 +129,8 @@ class EnvironmentAgent:
         """懒加载 LLM 客户端（首次调用才初始化，避免启动卡顿）"""
         if EnvironmentAgent._llm_client is None:
             try:
-                from modules.ai.deepseek_client import DeepSeekClient
-                EnvironmentAgent._llm_client = DeepSeekClient()
+                from modules.ai.model_factory import get_model_for_agent
+                EnvironmentAgent._llm_client = get_model_for_agent("environment")
             except Exception:
                 EnvironmentAgent._llm_client = False
         return EnvironmentAgent._llm_client if EnvironmentAgent._llm_client is not False else None
@@ -598,7 +598,7 @@ class EnvironmentAgent:
 """
         try:
             response = self.llm.client.chat.completions.create(
-                model="deepseek-v4-flash",
+                model=self.llm.chat_model,
                 messages=[
                     {"role": "system", "content": "你是专业的驾驶环境分析专家，只输出JSON。"},
                     {"role": "user", "content": prompt},

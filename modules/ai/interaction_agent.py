@@ -531,20 +531,21 @@ class InteractionAgent:
         调用失败则返回规则兜底。
         """
         try:
-            from modules.ai.deepseek_client import deepseek_client
+            from modules.ai.model_factory import get_model_for_agent
 
             prompt = f"""你是一个车载智能助手。用户说了：「{text}」
 
 请判断用户的意图是什么，用简短的一句话回复（10字以内），如果是以下情况：
 - 和车辆故障、警告灯、故障码有关 → 回答故障咨询相关
 - 和车载功能控制有关（空调、车窗、导航、音乐等）→ 回答功能控制相关  
-- 和娱乐有关（听歌、相声、新闻等）→ 回答娱乐相关
+- 和娱乐有关（听歌、相声、新闻等）�� 回答娱乐相关
 - 其他闲聊 → 回答友好引导
 
 只回复意图说明，不要加其他内容。"""
 
-            response = deepseek_client.client.chat.completions.create(
-                model="deepseek-v4-flash",
+            client = get_model_for_agent("interaction")
+            response = client.client.chat.completions.create(
+                model=client.chat_model,
                 messages=[
                     {"role": "system", "content": "你是车载助手，只回复简短意图说明。"},
                     {"role": "user", "content": prompt},

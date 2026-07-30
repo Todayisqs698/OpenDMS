@@ -509,8 +509,8 @@ class IntentionAgent:
     @property
     def client(self):
         if self._client is None:
-            from modules.ai.deepseek_client import deepseek_client
-            self._client = deepseek_client
+            from modules.ai.model_factory import get_model_for_agent
+            self._client = get_model_for_agent("intention")
         return self._client
 
     def analyze(self, text: str, driver_state: dict = None,
@@ -658,7 +658,7 @@ class IntentionAgent:
         )
 
         response = self.client.client.chat.completions.create(
-            model="deepseek-v4-flash",
+            model=self.client.chat_model,
             messages=[
                 {"role": "system", "content": "你是专业的车载意图识别引擎，只输出JSON，不要输出任何非JSON文本。"},
                 {"role": "user", "content": prompt},
