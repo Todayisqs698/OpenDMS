@@ -188,6 +188,10 @@ EdgeGuard/
 │   │   └── trip_templates.json      # 行程模板
 │   └── music/                       # 本地音乐文件
 │
+├── tools/                           # 辅助工具脚本
+│   ├── write_speech.py              # 文档生成工具
+│   └── insert_code_to_speech.py     # 代码片段插入工具
+│
 ├── tests/                           # 测试套件
 │   ├── unit/                        # 单元测试
 │   │   ├── test_gesture_map.py
@@ -206,7 +210,7 @@ EdgeGuard/
 │   ├── test_schemas.py              # Schema 校验测试
 │   └── conftest.py                  # Pytest fixtures
 │
-├── reference/                      # 参考资料（非运行时文件）
+├── reference/                      # 参考资料（非运行时文件，不纳入版本控制）
 │   ├── EdgeGuard设计文档/           # LaTeX 毕业设计论文
 │   ├── *.pptx                       # 汇报答辩 PPT
 │   ├── PLAN.md                      # 开发计划
@@ -262,8 +266,8 @@ EdgeGuard/
 
 ```bash
 # 1. 克隆
-git clone https://gitlab.omniedu.com/root/monOOoJl27YBk.git
-cd monOOoJl27YBk
+git clone https://github.com/Todayisqs698/OpenDMS.git
+cd OpenDMS
 
 # 2. Python 依赖
 pip install -r requirements.txt
